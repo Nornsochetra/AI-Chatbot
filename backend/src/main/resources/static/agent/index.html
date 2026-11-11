@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Console (R&amp;D)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --primary: #1f4e8c; --primary-soft: #e8eef7; --bg: #f5f6f8; --surface: #fff; --text: #1f2937;
+      --muted: #6b7280; --border: #e5e7eb; --warn: #b45309; --warn-bg: #fff8e1; --ok: #047857; --ok-bg: #e7f6ef;
+      --danger: #a61b1b;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body { font-family: 'Kantumruy Pro', system-ui, 'Segoe UI', sans-serif; font-size: 14px; color: var(--text); background: var(--bg); }
+    button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); padding: 6px 12px; }
+    button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+    button.danger { color: var(--danger); border-color: #f1c4c4; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    input, textarea { font: inherit; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; width: 100%; }
+    .hidden { display: none !important; }
+    header { background: var(--primary); color: #fff; padding: 10px 18px; display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 16px; margin: 0; flex: 1; }
+    header button { background: transparent; color: #fff; border-color: rgba(255,255,255,.4); }
+
+    /* login */
+    #login { max-width: 340px; margin: 80px auto; background: var(--surface); padding: 24px; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    #login h2 { margin: 0 0 16px; font-size: 18px; }
+    #login label { display: block; margin: 10px 0 4px; color: var(--muted); }
+    #login button { width: 100%; margin-top: 16px; }
+    .error { color: var(--danger); margin-top: 10px; min-height: 20px; }
+
+    /* layout */
+    #app { display: grid; grid-template-columns: 320px 1fr; height: calc(100% - 46px); }
+    #queue { border-right: 1px solid var(--border); background: var(--surface); overflow-y: auto; }
+    #queue h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 14px 16px 8px; }
+    .ticket { padding: 10px 16px; border-bottom: 1px solid var(--border); cursor: pointer; }
+    .ticket:hover { background: var(--bg); }
+    .ticket.selected { background: var(--primary-soft); }
+    .ticket .row { display: flex; justify-content: space-between; gap: 8px; }
+    .ticket .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .badge { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; }
+    .badge.WAITING { background: var(--warn-bg); color: var(--warn); }
+    .badge.ACTIVE { background: var(--ok-bg); color: var(--ok); }
+    .badge.CLOSED { background: var(--bg); color: var(--muted); }
+    .empty { color: var(--muted); padding: 16px; }
+
+    /* detail */
+    #detail { display: flex; flex-direction: column; min-height: 0; }
+    #detail-empty { margin: auto; color: var(--muted); }
+    #detail-head { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 18px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    #detail-head .info { flex: 1; min-width: 200px; }
+    #detail-head .title { font-weight: 600; }
+    #detail-head .meta { color: var(--muted); font-size: 12px; }
+    #timer { font-size: 12px; color: var(--warn); }
+    #rating { font-size: 13px; margin-top: 2px; }
+    #rating .stars { color: #d97706; letter-spacing: 1px; }
+    #conversation { flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; }
+    .section-label { align-self: center; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 6px 0; }
+    .msg { max-width: 75%; padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .msg .who { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+    .msg.customer { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); }
+    .msg.bot { align-self: flex-end; background: #eef0f3; color: #374151; }
+    .msg.agent { align-self: flex-end; background: var(--primary); color: #fff; }
+    .msg.agent .who { color: rgba(255,255,255,.8); }
+    .msg.history { opacity: .8; }
+    .system { align-self: center; font-size: 12px; color: var(--muted); background: var(--primary-soft); padding: 3px 12px; border-radius: 999px; }
+    .msg.file .file-row { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+    .msg.file .file-actions { display: flex; gap: 12px; margin-top: 4px; }
+    button.link { border: 0; background: none; padding: 0; color: var(--primary); text-decoration: underline; font-size: 13px; }
+    button.link.danger { color: var(--danger); }
+    button.link.file-name { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; text-align: left; }
+    .msg.file.removed button.link.file-name { color: var(--muted); text-decoration: line-through; cursor: default; }
+    .dialog-backdrop { position: fixed; inset: 0; background: rgba(17, 24, 39, .45); display: grid; place-items: center; z-index: 10; }
+    .dialog { background: var(--surface); border-radius: 12px; padding: 20px 22px; width: min(380px, calc(100vw - 32px)); box-shadow: 0 12px 40px rgba(0,0,0,.25); }
+    .dialog h3 { margin: 0 0 6px; font-size: 16px; overflow-wrap: anywhere; }
+    .dialog p { margin: 0 0 18px; color: var(--muted); }
+    .dialog .actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .dialog button.delete { background: var(--danger); border-color: var(--danger); color: #fff; }
+    .typing { font-size: 12px; color: var(--muted); padding: 4px 18px; font-style: italic; }
+    .typing .dots span { animation: blink 1.2s infinite; }
+    .typing .dots span:nth-child(2) { animation-delay: .2s; }
+    .typing .dots span:nth-child(3) { animation-delay: .4s; }
+    @keyframes blink { 0%, 80%, 100% { opacity: .2; } 40% { opacity: 1; } }
+    #composer { background: var(--surface); border-top: 1px solid var(--border); padding: 10px 18px; display: flex; gap: 8px; align-items: flex-end; }
+    #composer textarea { resize: none; height: 44px; }
+    .hint { color: var(--muted); font-size: 12px; padding: 0 18px 8px; background: var(--surface); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Agent Console <small style="opacity:.7;font-weight:400">R&amp;D</small></h1>
+    <span id="agent-name"></span>
+    <button id="logout" class="hidden" type="button">Sign out</button>
+  </header>
+
+  <form id="login" autocomplete="on">
+    <h2>Agent sign in</h2>
+    <label for="username">Username</label>
+    <input id="username" name="username" autocomplete="username" required />
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required />
+    <button class="primary" type="submit">Sign in</button>
+    <div class="error" id="login-error"></div>
+  </form>
+
+  <main id="app" class="hidden">
+    <aside id="queue">
+      <h2>Open chats</h2>
+      <div id="queue-list"></div>
+    </aside>
+    <section id="detail">
+      <div id="detail-empty">Select a chat from the queue.</div>
+      <div id="detail-head" class="hidden">
+        <div class="info">
+          <div class="title" id="detail-title"></div>
+          <div class="meta" id="detail-meta"></div>
+          <div id="timer"></div>
+          <div id="rating"></div>
+        </div>
+        <button id="accept" class="primary" type="button">Accept</button>
+        <button id="close" class="danger" type="button">Close chat</button>
+      </div>
+      <div id="conversation" class="hidden"></div>
+      <div id="customer-typing" class="typing hidden">Customer is typing<span class="dots"><span>.</span><span>.</span><span>.</span></span></div>
+      <form id="composer" class="hidden">
+        <textarea id="reply" placeholder="Reply to the customer… (Enter to send, Shift+Enter for a new line)" maxlength="2000"></textarea>
+        <button class="primary" type="submit">Send</button>
+      </form>
+      <div class="hint hidden" id="composer-hint">OTP, PIN, password and card numbers in customer messages are masked; files are shown as sent — delete card photos sent by mistake. Verify the customer through the normal process before discussing account details. Before closing, tell the customer a short rating request will follow.</div>
+    </section>
+  </main>
+
+  <div id="confirm" class="dialog-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="dialog">
+      <h3 id="confirm-title"></h3>
+      <p id="confirm-text"></p>
+      <div class="actions">
+        <button id="confirm-cancel" type="button">Cancel</button>
+        <button id="confirm-ok" type="button" class="delete">Delete</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const API = '/api/v1/agent/handovers';
+  const QUEUE_POLL_MS = 3000;
+  const RATING_CHECK_MS = 3000;
+  const STREAM_RETRY_MS = 3000;
+  const TYPING_VISIBLE_MS = 5000;
+  const TYPING_THROTTLE_MS = 2000;
+
+  const SYSTEM_TEXT = {
+    WAITING: () => 'Customer is waiting for an agent',
+    WAITING_REMINDER: () => 'Customer still waiting — "agents are busy" reminder sent',
+    AGENT_JOINED: (name) => `${name || 'Agent'} joined the chat`,
+    AGENT_LEFT: (name) => `${name || 'Agent'} closed the chat — customer is back with the bot`,
+    ATTACHMENT_REMOVED: (name) => `${name || 'Agent'} removed a file`,
+    INACTIVITY_CLOSED: () => 'Closed automatically: no customer message for 2 minutes',
+  };
+
+  const $ = (id) => document.getElementById(id);
+  let auth = null;           // "Basic ..." header, kept for this tab only
+  let agentName = '';
+  let selectedId = null;
+  let selected = null;       // summary of the selected handover
+  let selectedRating = null; // customer rating of the selected (closed) chat
+  let cursor = 0;
+  let queueTimer = null;
+  let messageTimer = null;   // rating check for a closed chat
+  let clockTimer = null;
+  let stream = null;         // AbortController of the live stream of the selected chat
+  let customerTypingTimer = null;
+  let lastTypingSent = 0;
+
+  // ---------- API ----------
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', Authorization: auth, ...(options.headers || {}) },
+    });
+    if (res.status === 401) { signOut('Your session expired. Please sign in again.'); throw new Error('unauthorized'); }
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { detail = (await res.json()).detail || detail; } catch { /* no body */ }
+      throw new Error(detail);
+    }
+    return res.json();
+  }
+
+  // ---------- sign in ----------
+  $('login').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const user = $('username').value.trim();
+    auth = 'Basic ' + btoa(unescape(encodeURIComponent(user + ':' + $('password').value)));
+    $('login-error').textContent = '';
+    try {
+      const res = await fetch(API, { headers: { Authorization: auth } });
+      if (res.status === 401) { $('login-error').textContent = 'Wrong username or password.'; auth = null; return; }
+      if (!res.ok) throw new Error(res.statusText);
+      agentName = user;
+      try { sessionStorage.setItem('agent-auth', auth); sessionStorage.setItem('agent-name', user); } catch { /* ignore */ }
+      startApp();
+    } catch (err) {
+      $('login-error').textContent = 'Cannot reach the server: ' + err.message;
+      auth = null;
+    }
+  });
+
+  $('logout').addEventListener('click', () => signOut(''));
+
+  function signOut(message) {
+    auth = null;
+    try { sessionStorage.removeItem('agent-auth'); sessionStorage.removeItem('agent-name'); } catch { /* ignore */ }
+    clearInterval(queueTimer); clearInterval(messageTimer); clearInterval(clockTimer);
+    stopStream();
+    selectedId = null; selected = null;
+    $('app').classList.add('hidden'); $('logout').classList.add('hidden'); $('agent-name').textContent = '';
+    $('login').classList.remove('hidden');
+    $('login-error').textContent = message;
+  }
+
+  function startApp() {
+    $('login').classList.add('hidden');
+    $('app').classList.remove('hidden');
+    $('logout').classList.remove('hidden');
+    $('agent-name').textContent = agentName;
+    refreshQueue();
+    queueTimer = setInterval(refreshQueue, QUEUE_POLL_MS);
+    clockTimer = setInterval(renderHead, 1000);
+  }
+
+  // ---------- queue ----------
+  async function refreshQueue() {
+    let list;
+    try { list = await api(API); } catch { return; }
+    const box = $('queue-list');
+    box.replaceChildren();
+    if (list.length === 0) {
+      box.append(el('div', 'empty', 'No open chats.'));
+    }
+    for (const h of list) {
+      const item = el('div', 'ticket' + (h.id === selectedId ? ' selected' : ''));
+      const row = el('div', 'row');
+      row.append(el('strong', '', channelLabel(h.channel)), el('span', 'badge ' + h.status, h.status));
+      item.append(row, el('div', 'meta', `${reasonLabel(h.reason)} · ${ago(h.createdAt)} ago${h.agentName ? ' · ' + h.agentName : ''}`));
+      item.addEventListener('click', () => select(h.id));
+      box.append(item);
+    }
+    // the selected chat may have been closed (e.g. by the inactivity timer): refresh its header
+    if (selectedId) {
+      const fresh = list.find((h) => h.id === selectedId);
+      if (fresh) { selected = fresh; renderHead(); }
+      else if (selected && selected.status !== 'CLOSED') { reloadSelected(); }
+    }
+  }
+
+  // ---------- detail ----------
+  async function select(id) {
+    stopStream();
+    hideCustomerTyping();
+    selectedId = id;
+    selectedRating = null;
+    cursor = 0;
+    clearInterval(messageTimer);
+    $('conversation').replaceChildren();
+    await reloadSelected(true);
+    openStream(id);
+    // a closed chat gets its rating from the customer a little later
+    messageTimer = setInterval(() => {
+      if (selected && selected.status === 'CLOSED' && !selectedRating) reloadSelected();
+    }, RATING_CHECK_MS);
+    refreshQueue();
+  }
+
+  // ---------- real-time stream (Server-Sent Events read with fetch, so the login header can be sent) ----------
+  function openStream(id) {
+    const controller = new AbortController();
+    stream = controller;
+    (async () => {
+      try {
+        const res = await fetch(`${API}/${id}/events?after=${cursor}`, {
+          headers: { Authorization: auth, Accept: 'text/event-stream' },
+          signal: controller.signal,
+        });
+        if (res.status === 401) { signOut('Your session expired. Please sign in again.'); return; }
+        if (!res.ok || !res.body) throw new Error('stream ' + res.status);
+        const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+        let buffer = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += value;
+          let end;
+          while ((end = buffer.search(/\r?\n\r?\n/)) >= 0) {
+            const block = buffer.slice(0, end);
+            buffer = buffer.slice(end).replace(/^\r?\n\r?\n/, '');
+            handleStreamEvent(block);
+          }
+        }
+      } catch {
+        if (controller.signal.aborted) return;
+      }
+      // the stream ended (server restart, network): catch up now, then reconnect from the cursor
+      if (!controller.signal.aborted && stream === controller && selectedId === id) {
+        pollMessages();
+        setTimeout(() => { if (stream === controller && selectedId === id) openStream(id); }, STREAM_RETRY_MS);
+      }
+    })();
+  }
+
+  function stopStream() {
+    if (stream) { stream.abort(); stream = null; }
+  }
+
+  function handleStreamEvent(block) {
+    let name = 'message';
+    const data = [];
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith(':')) continue; // keep-alive comment
+      if (line.startsWith('event:')) name = line.slice(6).trim();
+      else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
+    }
+    if (!data.length) return;
+    const payload = JSON.parse(data.join('\n'));
+    if (name === 'update') {
+      if (payload.messages.some((m) => m.sender === 'CUSTOMER')) hideCustomerTyping();
+      appendMessages(payload.messages);
+      selected = payload.handover;
+      renderHead();
+    } else if (name === 'typing' && payload.who === 'CUSTOMER') {
+      showCustomerTyping();
+    }
+  }
+
+  function showCustomerTyping() {
+    $('customer-typing').classList.remove('hidden');
+    clearTimeout(customerTypingTimer);
+    customerTypingTimer = setTimeout(hideCustomerTyping, TYPING_VISIBLE_MS);
+  }
+
+  function hideCustomerTyping() {
+    clearTimeout(customerTypingTimer);
+    $('customer-typing').classList.add('hidden');
+  }
+
+  async function reloadSelected(full = false) {
+    if (!selectedId) return;
+    let detail;
+    try { detail = await api(`${API}/${selectedId}`); } catch (err) { alertInline(err.message); return; }
+    selected = detail.handover;
+    selectedRating = detail.rating;
+    if (full) {
+      const conv = $('conversation');
+      conv.replaceChildren();
+      if (detail.botTranscript.length) {
+        conv.append(el('div', 'section-label', 'Conversation with the bot'));
+        for (const turn of detail.botTranscript) {
+          conv.append(bubble('customer history', 'Customer', turn.userText));
+          if (turn.botReply) conv.append(bubble('bot history', 'Bot', turn.botReply));
+        }
+      }
+      conv.append(el('div', 'section-label', 'Live chat'));
+      appendMessages(detail.messages);
+    }
+    renderHead();
+  }
+
+  /** Catch-up without the stream (after a reconnect or an action); duplicates are dropped by the cursor. */
+  async function pollMessages() {
+    if (!selectedId) return;
+    try {
+      const messages = await api(`${API}/${selectedId}/messages?after=${cursor}`);
+      if (messages.length) {
+        appendMessages(messages);
+        // a system message can mean the status changed (joined / closed)
+        if (messages.some((m) => m.sender === 'SYSTEM')) reloadSelected();
+      }
+    } catch { /* retry on the next tick */ }
+  }
+
+  function appendMessages(messages) {
+    const conv = $('conversation');
+    // the stream and a catch-up poll can deliver the same message; the cursor drops repeats
+    for (const m of messages.filter((message) => message.id > cursor)) {
+      cursor = m.id;
+      if (m.sender === 'SYSTEM') {
+        conv.append(el('div', 'system', SYSTEM_TEXT[m.text] ? SYSTEM_TEXT[m.text](m.senderName) : m.text));
+        if (m.text === 'ATTACHMENT_REMOVED' && m.attachment) markFileRemoved(m.attachment.id);
+      }
+      else if (m.sender === 'AGENT') conv.append(bubble('agent', m.senderName || 'Agent', m.text));
+      else if (m.attachment) conv.append(fileBubble(m.attachment));
+      else conv.append(bubble('customer', 'Customer', m.text));
+    }
+    conv.scrollTop = conv.scrollHeight;
+  }
+
+  function renderHead() {
+    const has = Boolean(selected);
+    $('detail-empty').classList.toggle('hidden', has);
+    for (const id of ['detail-head', 'conversation']) $(id).classList.toggle('hidden', !has);
+    if (!has) return;
+    const h = selected;
+    $('detail-title').textContent = `${channelLabel(h.channel)} chat`;
+    $('detail-meta').textContent = `${h.status} · ${reasonLabel(h.reason)} · opened ${ago(h.createdAt)} ago`
+      + (h.agentName ? ` · agent: ${h.agentName}` : '')
+      + (h.closeReason ? ` · closed: ${h.closeReason}` : '');
+    $('accept').classList.toggle('hidden', h.status !== 'WAITING');
+    $('close').classList.toggle('hidden', h.status === 'CLOSED');
+    const active = h.status === 'ACTIVE';
+    $('composer').classList.toggle('hidden', !active);
+    $('composer-hint').classList.toggle('hidden', !active);
+    if (active) {
+      // auto-close is a backend setting; autoCloseAt is null when it is off (only the agent closes the chat)
+      const idle = Math.floor((Date.now() - Date.parse(h.lastCustomerActivityAt)) / 1000);
+      let text = `Customer idle ${fmt(idle)}`;
+      if (h.autoCloseAt) {
+        const left = Math.max(0, Math.floor((Date.parse(h.autoCloseAt) - Date.now()) / 1000));
+        text += ` · auto-close in ${fmt(left)}`;
+      }
+      $('timer').textContent = text;
+    } else {
+      $('timer').textContent = '';
+    }
+    renderRating(h);
+  }
+
+  function renderRating(h) {
+    const box = $('rating');
+    box.replaceChildren();
+    if (h.status !== 'CLOSED') return;
+    if (!selectedRating) {
+      box.append(el('span', 'meta', 'Waiting for the customer\'s rating…'));
+      return;
+    }
+    const r = selectedRating;
+    box.append(el('span', '', 'Customer rating: '), el('span', 'stars', '★'.repeat(r.score) + '☆'.repeat(5 - r.score)),
+      el('span', '', ` ${r.score}/5`));
+    if (r.comment) box.append(el('span', 'meta', ` — "${r.comment}"`));
+  }
+
+  // ---------- actions ----------
+  $('accept').addEventListener('click', async () => {
+    try { selected = await api(`${API}/${selectedId}/accept`, { method: 'POST' }); renderHead(); pollMessages(); refreshQueue(); }
+    catch (err) { alertInline(err.message); }
+  });
+
+  $('close').addEventListener('click', async () => {
+    try { selected = await api(`${API}/${selectedId}/close`, { method: 'POST' }); renderHead(); pollMessages(); refreshQueue(); }
+    catch (err) { alertInline(err.message); }
+  });
+
+  $('composer').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = $('reply').value.trim();
+    if (!text) return;
+    try {
+      await api(`${API}/${selectedId}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
+      $('reply').value = '';
+      pollMessages();
+    } catch (err) { alertInline(err.message); }
+  });
+
+  $('reply').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('composer').requestSubmit(); }
+  });
+
+  // the customer sees "<your username> is typing…" (sent at most every 2 s)
+  $('reply').addEventListener('input', () => {
+    if (!selected || selected.status !== 'ACTIVE' || !$('reply').value.trim()) return;
+    const now = Date.now();
+    if (now - lastTypingSent < TYPING_THROTTLE_MS) return;
+    lastTypingSent = now;
+    fetch(`${API}/${selectedId}/typing`, { method: 'POST', headers: { Authorization: auth } }).catch(() => undefined);
+  });
+
+  // ---------- helpers ----------
+  function el(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text; // textContent only: customer text is never parsed as HTML
+    return node;
+  }
+  function bubble(cls, who, text) {
+    const node = el('div', 'msg ' + cls);
+    node.append(el('div', 'who', who), el('div', '', text));
+    return node;
+  }
+  // ---------- files the customer sent (docs/attachments-simple.md) ----------
+  function fileBubble(file) {
+    const node = el('div', 'msg customer file');
+    node.dataset.attachmentId = file.id;
+    const row = el('div', 'file-row');
+    // the file name is the link: click it to open the file
+    const name = el('button', 'link file-name', file.fileName);
+    name.type = 'button';
+    name.title = 'Open the file';
+    name.addEventListener('click', () => viewFile(file.id));
+    row.append(el('span', '', '📎 '), name, el('span', 'meta', ` · ${fileSize(file.sizeBytes)}`));
+    const actions = el('div', 'file-actions');
+    const del = el('button', 'link danger', 'Delete');
+    del.type = 'button';
+    del.addEventListener('click', () => deleteFile(file.id, file.fileName));
+    actions.append(del);
+    node.append(el('div', 'who', 'Customer'), row, actions);
+    if (file.removed) setRemoved(node);
+    return node;
+  }
+
+  function setRemoved(node) {
+    node.classList.add('removed');
+    const name = node.querySelector('.file-name');
+    if (name) { name.disabled = true; name.title = 'This file was removed'; }
+    const actions = node.querySelector('.file-actions');
+    if (actions) actions.replaceChildren(el('span', 'meta', 'File removed'));
+  }
+
+  function markFileRemoved(id) {
+    const node = $('conversation').querySelector(`[data-attachment-id="${CSS.escape(id)}"]`);
+    if (node) setRemoved(node);
+  }
+
+  /** Opens the file in a new tab. Fetched with the agent login (no public URL); the backend audits the view. */
+  async function viewFile(id) {
+    const tab = window.open('', '_blank'); // opened now, so the browser does not block it as a pop-up
+    try {
+      const res = await fetch(`${API}/${selectedId}/attachments/${id}`, { headers: { Authorization: auth } });
+      if (res.status === 401) { tab?.close(); signOut('Your session expired. Please sign in again.'); return; }
+      if (!res.ok) throw new Error(res.status === 404 ? 'The file no longer exists' : 'Could not open the file');
+      const url = URL.createObjectURL(await res.blob());
+      if (tab) tab.location.href = url; else window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      tab?.close();
+      alertInline(err.message);
+    }
+  }
+
+  /** Two clicks (no browser dialog): "Delete" → "Confirm delete". The customer sees that the file was removed. */
+  /** Asks in a pop-up first; the customer then sees that the file was removed. */
+  async function deleteFile(id, fileName) {
+    if (!(await confirmDialog(`Delete "${fileName}"?`, 'The file is erased for good. The customer will see that you removed it.'))) return;
+    try {
+      const res = await fetch(`${API}/${selectedId}/attachments/${id}`, { method: 'DELETE', headers: { Authorization: auth } });
+      if (res.status === 401) { signOut('Your session expired. Please sign in again.'); return; }
+      if (!res.ok && res.status !== 404) throw new Error('Could not delete the file');
+      markFileRemoved(id);
+    } catch (err) { alertInline(err.message); }
+  }
+
+  /** In-page confirmation pop-up (no browser dialog). Resolves true for Delete, false for Cancel / Esc / outside click. */
+  function confirmDialog(title, text) {
+    return new Promise((resolve) => {
+      const box = $('confirm');
+      $('confirm-title').textContent = title;
+      $('confirm-text').textContent = text;
+      box.classList.remove('hidden');
+      $('confirm-cancel').focus();
+      const done = (answer) => {
+        box.classList.add('hidden');
+        $('confirm-ok').removeEventListener('click', onOk);
+        $('confirm-cancel').removeEventListener('click', onCancel);
+        box.removeEventListener('click', onBackdrop);
+        document.removeEventListener('keydown', onKey);
+        resolve(answer);
+      };
+      const onOk = () => done(true);
+      const onCancel = () => done(false);
+      const onBackdrop = (e) => { if (e.target === box) done(false); };
+      const onKey = (e) => { if (e.key === 'Escape') done(false); };
+      $('confirm-ok').addEventListener('click', onOk);
+      $('confirm-cancel').addEventListener('click', onCancel);
+      box.addEventListener('click', onBackdrop);
+      document.addEventListener('keydown', onKey);
+    });
+  }
+
+  function fileSize(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function alertInline(message) { $('conversation').append(el('div', 'system', '⚠ ' + message)); }
+  function channelLabel(c) { return c === 'MOBILE_APP' ? 'Mobile app' : 'Website'; }
+  function reasonLabel(r) { return r === 'BOT_SUGGESTED' ? 'Bot could not answer' : 'Customer asked'; }
+  function ago(iso) { return fmt(Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000))); }
+  function fmt(s) { return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`; }
+
+  // ---------- resume after refresh ----------
+  try {
+    const saved = sessionStorage.getItem('agent-auth');
+    if (saved) { auth = saved; agentName = sessionStorage.getItem('agent-name') || ''; startApp(); }
+  } catch { /* ignore */ }
+})();
+</script>
+</body>
+</html>

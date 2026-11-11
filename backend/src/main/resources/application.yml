@@ -1,0 +1,81 @@
+spring:
+  application:
+    name: chatbot-backend
+  # Local settings and secrets live in backend/.env (not committed). Real environment variables still win.
+  config:
+    import: optional:file:.env[.properties]
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/chatbot_dev_db}
+    username: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  flyway:
+    enabled: true
+  servlet:
+    multipart:
+      # voice recordings (widget caps them at 60 s, a few hundred KB)
+      max-file-size: 5MB
+      max-request-size: 6MB
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+  chat:
+    session-ttl: 30m
+    max-message-length: 2000
+  handover:
+    # Off: only the agent closes a live chat. The requirements ask for an automatic close after
+    # 2 minutes without a customer message; set HANDOVER_AUTO_CLOSE=true to switch it on.
+    auto-close-enabled: ${HANDOVER_AUTO_CLOSE:false}
+    inactivity-timeout: ${HANDOVER_INACTIVITY_TIMEOUT:2m}
+    # while no agent has accepted, send the customer a "still waiting" message this often (0 = off)
+    waiting-reminder: ${HANDOVER_WAITING_REMINDER:60s}
+  attachment:
+    # customer uploads (JPG / PNG / PDF, max 5 MB) are deleted automatically after this many days
+    retention-days: ${ATTACHMENT_RETENTION_DAYS:30}
+    virus-scan:
+      # ClamAV (clamd). Off until ClamAV is installed; the requirements require it before going live.
+      enabled: ${CLAMAV_ENABLED:false}
+      host: ${CLAMAV_HOST:localhost}
+      port: ${CLAMAV_PORT:3310}
+      timeout: 10s
+  agent:
+    # R&D: one account for the built-in agent console (/agent). If no password is set, one is generated and logged.
+    username: ${AGENT_USERNAME:agent}
+    password: ${AGENT_PASSWORD:}
+
+# Gemini voice (speech-to-text and read-aloud). Empty GEMINI_API_KEY = voice off (endpoints answer 503).
+gemini:
+  api-key: ${GEMINI_API_KEY:}
+  base-url: https://generativelanguage.googleapis.com/v1beta
+  api-revision: 2026-05-20
+  # Tried in order; when a model is overloaded ("high demand" 503 / 429) or too slow, the next one is used.
+  # 2026-11-10: gemini-3.8-flash and 3.7-flash were overloaded; 3.5-flash answered reliably.
+  transcribe-models: ${GEMINI_TRANSCRIBE_MODELS:gemini-3.5-flash,gemini-3.6-flash,gemini-3.8-flash}
+  tts-models: ${GEMINI_TTS_MODELS:gemini-3.8-flash-tts,gemini-3.8-flash-lite-tts}
+  voice: ${GEMINI_TTS_VOICE:Kore}
+  # per model attempt
+  timeout: 25s
+
+# Botpress Chat API. base-url is https://chat.botpress.cloud/<id>
+# R&D: <id> is the Webchat client ID (works with the Chat API, not officially documented).
+botpress:
+  base-url: ${BOTPRESS_BASE_URL:}
+  poll-interval-ms: 700
+  reply-timeout-ms: 20000

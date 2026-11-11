@@ -1,0 +1,264 @@
+package com.kbprasac.chatbot.handover.service;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.kbprasac.chatbot.config.HandoverProperties;
+import com.kbprasac.chatbot.shared.entity.Attachment;
+import com.kbprasac.chatbot.shared.entity.ChatEvent;
+import com.kbprasac.chatbot.shared.entity.Handover;
+import com.kbprasac.chatbot.shared.entity.HandoverMessage;
+import com.kbprasac.chatbot.shared.enums.Channel;
+import com.kbprasac.chatbot.shared.enums.HandoverCloseReason;
+import com.kbprasac.chatbot.shared.enums.HandoverReason;
+import com.kbprasac.chatbot.shared.enums.HandoverStatus;
+import com.kbprasac.chatbot.shared.enums.MessageSender;
+import com.kbprasac.chatbot.shared.enums.SystemMessageCode;
+import com.kbprasac.chatbot.shared.exception.ConflictException;
+import com.kbprasac.chatbot.shared.exception.NotFoundException;
+import com.kbprasac.chatbot.shared.repository.ChatEventRepository;
+import com.kbprasac.chatbot.shared.repository.HandoverMessageRepository;
+import com.kbprasac.chatbot.shared.repository.HandoverRepository;
+
+/**
+ * Live-agent handover: WAITING (in the queue) → ACTIVE (agent accepted) → CLOSED (agent closed, or
+ * the customer was inactive too long). While a handover is open, the bot stays silent.
+ */
+@Service
+public class HandoverService {
+
+    private static final Logger log = LoggerFactory.getLogger(HandoverService.class);
+
+    static final List<HandoverStatus> OPEN = List.of(HandoverStatus.WAITING, HandoverStatus.ACTIVE);
+
+    private final HandoverRepository handoverRepository;
+    private final HandoverMessageRepository messageRepository;
+    private final ChatEventRepository chatEventRepository;
+    private final HelpdeskPort helpdesk;
+    private final HandoverProperties props;
+    private final ApplicationEventPublisher events;
+
+    public HandoverService(HandoverRepository handoverRepository, HandoverMessageRepository messageRepository,
+                           ChatEventRepository chatEventRepository, HelpdeskPort helpdesk, HandoverProperties props,
+                           ApplicationEventPublisher events) {
+        this.handoverRepository = handoverRepository;
+        this.messageRepository = messageRepository;
+        this.chatEventRepository = chatEventRepository;
+        this.helpdesk = helpdesk;
+        this.props = props;
+        this.events = events;
+    }
+
+    /** Opens a handover for the session, or returns the one already open. */
+    @Transactional
+    public Handover start(String sessionId, Channel channel, HandoverReason reason) {
+        return findOpen(sessionId).orElseGet(() -> {
+            Instant now = Instant.now();
+            Handover handover = handoverRepository.save(Handover.builder()
+                    .id(UUID.randomUUID())
+                    .sessionId(sessionId)
+                    .channel(channel)
+                    .status(HandoverStatus.WAITING)
+                    .reason(reason)
+                    .createdAt(now)
+                    .lastCustomerActivityAt(now)
+                    .build());
+            addSystemMessage(handover, SystemMessageCode.WAITING);
+            helpdesk.ticketOpened(handover, transcript(sessionId));
+            return handover;
+        });
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<Handover> findOpen(String sessionId) {
+        return handoverRepository.findFirstBySessionIdAndStatusInOrderByCreatedAtDesc(sessionId, OPEN);
+    }
+
+    @Transactional
+    public void customerMessage(Handover handover, String maskedText) {
+        handover.setLastCustomerActivityAt(Instant.now());
+        handoverRepository.save(handover);
+        addMessage(handover, MessageSender.CUSTOMER, maskedText);
+        helpdesk.customerMessage(handover, maskedText);
+    }
+
+    /** The customer uploaded a file; it appears in the chat as a message pointing at the attachment. */
+    @Transactional
+    public HandoverMessage customerAttachment(Handover handover, Attachment attachment) {
+        handover.setLastCustomerActivityAt(Instant.now());
+        handoverRepository.save(handover);
+        return addMessage(handover, MessageSender.CUSTOMER, attachment.getFileName(), attachment);
+    }
+
+    /** The agent removed a file; both sides see a "file removed" event pointing at it. */
+    @Transactional
+    public void attachmentRemoved(Handover handover, Attachment attachment) {
+        addMessage(handover, MessageSender.SYSTEM, SystemMessageCode.ATTACHMENT_REMOVED.name(), attachment);
+    }
+
+    @Transactional
+    public Handover accept(UUID handoverId, String agentName) {
+        Handover handover = get(handoverId);
+        if (handover.getStatus() != HandoverStatus.WAITING) {
+            throw new ConflictException("Handover is " + handover.getStatus() + ", only WAITING can be accepted");
+        }
+        Instant now = Instant.now();
+        handover.setStatus(HandoverStatus.ACTIVE);
+        handover.setAgentName(agentName);
+        handover.setAcceptedAt(now);
+        // the inactivity timer starts when the agent joins, not when the customer asked
+        handover.setLastCustomerActivityAt(now);
+        handoverRepository.save(handover);
+        addSystemMessage(handover, SystemMessageCode.AGENT_JOINED);
+        events.publishEvent(new QueueChangedEvent());
+        return handover;
+    }
+
+    @Transactional
+    public HandoverMessage agentMessage(UUID handoverId, String text) {
+        Handover handover = get(handoverId);
+        if (handover.getStatus() != HandoverStatus.ACTIVE) {
+            throw new ConflictException("Handover is " + handover.getStatus() + ", accept it before replying");
+        }
+        return addMessage(handover, MessageSender.AGENT, text);
+    }
+
+    /** Closes the handover; the session goes back to the bot. Closing twice is harmless. */
+    @Transactional
+    public Handover close(UUID handoverId, HandoverCloseReason reason) {
+        Handover handover = get(handoverId);
+        if (handover.getStatus() == HandoverStatus.CLOSED) {
+            return handover;
+        }
+        boolean wasWaiting = handover.getStatus() == HandoverStatus.WAITING;
+        handover.setStatus(HandoverStatus.CLOSED);
+        handover.setCloseReason(reason);
+        handover.setClosedAt(Instant.now());
+        handoverRepository.save(handover);
+        addSystemMessage(handover, reason == HandoverCloseReason.CUSTOMER_INACTIVE
+                ? SystemMessageCode.INACTIVITY_CLOSED
+                : SystemMessageCode.AGENT_LEFT);
+        helpdesk.ticketClosed(handover);
+        if (wasWaiting) {
+            events.publishEvent(new QueueChangedEvent());
+        }
+        return handover;
+    }
+
+    /** 1 = next in line. Null when the handover is not waiting (an agent has it, or it is closed). */
+    @Transactional(readOnly = true)
+    public Integer queuePosition(Handover handover) {
+        if (handover.getStatus() != HandoverStatus.WAITING) {
+            return null;
+        }
+        return (int) handoverRepository.countByStatusAndCreatedAtBefore(HandoverStatus.WAITING, handover.getCreatedAt()) + 1;
+    }
+
+    /**
+     * While no agent has accepted, reassure the customer every {@code app.handover.waiting-reminder}
+     * ("our agents are still busy..."). Stops as soon as an agent accepts.
+     */
+    @Scheduled(fixedDelay = 10_000, initialDelay = 10_000)
+    @Transactional
+    public void remindWaiting() {
+        Duration interval = props.waitingReminder();
+        if (interval == null || interval.isZero() || interval.isNegative()) {
+            return;
+        }
+        Instant now = Instant.now();
+        for (Handover handover : handoverRepository.findByStatus(HandoverStatus.WAITING)) {
+            Instant last = handover.getLastReminderAt() != null ? handover.getLastReminderAt() : handover.getCreatedAt();
+            if (last.plus(interval).isAfter(now)) {
+                continue;
+            }
+            handover.setLastReminderAt(now);
+            handoverRepository.save(handover);
+            addSystemMessage(handover, SystemMessageCode.WAITING_REMINDER);
+        }
+    }
+
+    /**
+     * Requirement: after 2 minutes without a customer message, close the live chat and return to the bot.
+     * Only when {@code app.handover.auto-close-enabled} is on; otherwise only the agent closes the chat.
+     */
+    @Scheduled(fixedDelay = 15_000, initialDelay = 15_000)
+    @Transactional
+    public void closeInactive() {
+        if (!props.autoCloseEnabled()) {
+            return;
+        }
+        Instant cutoff = Instant.now().minus(props.inactivityTimeout());
+        for (Handover handover : handoverRepository.findByStatusAndLastCustomerActivityAtBefore(HandoverStatus.ACTIVE, cutoff)) {
+            log.info("Closing handover {}: no customer message since {}", handover.getId(),
+                    handover.getLastCustomerActivityAt());
+            close(handover.getId(), HandoverCloseReason.CUSTOMER_INACTIVE);
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public Handover get(UUID handoverId) {
+        return handoverRepository.findById(handoverId)
+                .orElseThrow(() -> new NotFoundException("Handover " + handoverId + " not found"));
+    }
+
+    @Transactional(readOnly = true)
+    public List<Handover> queue() {
+        return handoverRepository.findByStatusInOrderByCreatedAtAsc(OPEN);
+    }
+
+    @Transactional(readOnly = true)
+    public List<HandoverMessage> messagesForSession(String sessionId, long afterId) {
+        return messageRepository.findBySessionIdAndIdGreaterThanOrderByIdAsc(sessionId, afterId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<HandoverMessage> messagesForHandover(UUID handoverId, long afterId) {
+        return messageRepository.findByHandoverIdAndIdGreaterThanOrderByIdAsc(handoverId, afterId);
+    }
+
+    /** The bot conversation before the handover (masked text only), so the agent has the context. */
+    @Transactional(readOnly = true)
+    public List<ChatEvent> transcript(String sessionId) {
+        return chatEventRepository.findBySessionIdOrderByCreatedAtAsc(sessionId);
+    }
+
+    private void addSystemMessage(Handover handover, SystemMessageCode code) {
+        addMessage(handover, MessageSender.SYSTEM, code.name(), null);
+    }
+
+    private HandoverMessage addMessage(Handover handover, MessageSender sender, String text) {
+        return addMessage(handover, sender, text, null);
+    }
+
+    /** Every change in a handover creates a message, so this is also where open screens get notified. */
+    private HandoverMessage addMessage(Handover handover, MessageSender sender, String text, Attachment attachment) {
+        HandoverMessage message = messageRepository.save(HandoverMessage.builder()
+                .handoverId(handover.getId())
+                .sessionId(handover.getSessionId())
+                .sender(sender)
+                .text(text)
+                .senderName(namedAfterAgent(sender, text) ? handover.getAgentName() : null)
+                .attachment(attachment)
+                .createdAt(Instant.now())
+                .build());
+        events.publishEvent(new HandoverChangedEvent(handover.getId(), handover.getSessionId()));
+        return message;
+    }
+
+    /** The customer sees the agent's login username on agent messages and on joined / left events. */
+    private static boolean namedAfterAgent(MessageSender sender, String text) {
+        return sender == MessageSender.AGENT
+                || (sender == MessageSender.SYSTEM && !SystemMessageCode.WAITING.name().equals(text)
+                        && !SystemMessageCode.WAITING_REMINDER.name().equals(text));
+    }
+}

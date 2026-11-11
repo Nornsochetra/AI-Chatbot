@@ -1,0 +1,28 @@
+# Local settings and secrets (keep the templates)
+.env
+.env.*
+!.env.example
+
+# Backend build output
+backend/build/
+backend/.gradle/
+backend/target/
+
+# Widget build output and dependencies
+widget/node_modules/
+widget/.next/
+widget/out/
+*.tsbuildinfo
+
+# Private reference documents (kept out of the public repo)
+*.pdf
+
+# Python
+__pycache__/
+
+# IDE / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
