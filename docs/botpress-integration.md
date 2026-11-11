@@ -128,4 +128,5 @@ Not yet run: #10 (board of directors), #14 (explicit agent request).
 2. If not, what is the supported way for a backend to call a Viber agent? Can we create a Studio bot with the Chat integration on our plan?
 3. How do we use a private key instead of the public client ID?
 4. How should the agent signal "needs a human" (custom event, tag or message) so our backend can trigger handover?
+   Botpress Desk (their agent inbox) was tested as an alternative to our console: our chats appear there, but Desk replies do not reach our widget. See [botpress-desk.md](botpress-desk.md).
 5. Rate limits and pricing for the expected volume.

@@ -225,6 +225,7 @@
   }
 
   function startApp() {
+    showInboxNotice();
     $('login').classList.add('hidden');
     $('app').classList.remove('hidden');
     $('logout').classList.remove('hidden');
@@ -232,6 +233,18 @@
     refreshQueue();
     queueTimer = setInterval(refreshQueue, QUEUE_POLL_MS);
     clockTimer = setInterval(renderHead, 1000);
+  }
+
+  /** Botpress Desk mode: agents accept, reply and close in Desk; this console only shows the chats. */
+  async function showInboxNotice() {
+    try {
+      const config = await (await fetch('/api/v1/chat/config')).json();
+      if (config.agentInbox !== 'BOTPRESS_DESK' || $('inbox-notice')) return;
+      const notice = el('div', 'system', 'Botpress Desk mode: agents accept, reply and close chats in Botpress Desk. This console is read-only.');
+      notice.id = 'inbox-notice';
+      notice.style.cssText = 'background:var(--warn-bg);color:var(--warn);padding:8px 18px;text-align:left';
+      $('app').before(notice);
+    } catch { /* the notice is optional */ }
   }
 
   // ---------- queue ----------
@@ -587,7 +600,11 @@
 
   function alertInline(message) { $('conversation').append(el('div', 'system', '⚠ ' + message)); }
   function channelLabel(c) { return c === 'MOBILE_APP' ? 'Mobile app' : 'Website'; }
-  function reasonLabel(r) { return r === 'BOT_SUGGESTED' ? 'Bot could not answer' : 'Customer asked'; }
+  function reasonLabel(r) {
+    if (r === 'BOT_SUGGESTED') return 'Bot could not answer';
+    if (r === 'AGENT_INITIATED') return 'Agent joined from Botpress Desk';
+    return 'Customer asked';
+  }
   function ago(iso) { return fmt(Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000))); }
   function fmt(s) { return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`; }
 

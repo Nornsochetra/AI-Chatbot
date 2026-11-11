@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import com.kbprasac.chatbot.shared.entity.ChatEvent;
@@ -11,6 +12,7 @@ import com.kbprasac.chatbot.shared.entity.Handover;
 
 /** The R&D agent console (/agent) reads handovers straight from our database, so there is nothing to forward. */
 @Component
+@ConditionalOnProperty(name = "app.handover.inbox", havingValue = "console", matchIfMissing = true)
 public class BuiltInHelpdesk implements HelpdeskPort {
 
     private static final Logger log = LoggerFactory.getLogger(BuiltInHelpdesk.class);

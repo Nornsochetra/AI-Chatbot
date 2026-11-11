@@ -5,6 +5,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import {
   ChatApiError,
   eventsUrl,
+  getChatConfig,
   getUpdates,
   readAloud,
   requestHandover,
@@ -126,8 +127,16 @@ export function ChatApp({ config }: { config: WidgetConfig }) {
   const liveHandlersRef = useRef({ showAgentTyping, hideAgentTyping });
   liveHandlersRef.current = { showAgentTyping, hideAgentTyping };
 
+  // Botpress Desk mode: an agent can join any chat, even one the customer did not escalate
+  const [agentMayJoinAnytime, setAgentMayJoinAnytime] = useState(false);
+  useEffect(() => {
+    getChatConfig(config.apiBase)
+      .then((c) => setAgentMayJoinAnytime(c.agentMayJoinAnytime))
+      .catch(() => undefined); // older backend or network blip: console behaviour
+  }, [config.apiBase]);
+
   // while an agent is waiting or active: real-time push (Server-Sent Events), polling only as a fallback
-  const live = state.mode !== 'bot';
+  const live = state.mode !== 'bot' || agentMayJoinAnytime;
   useEffect(() => {
     if (!live || !state.sessionId) return;
     const sessionId = state.sessionId;

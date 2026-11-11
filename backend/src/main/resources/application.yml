@@ -46,6 +46,8 @@ app:
     inactivity-timeout: ${HANDOVER_INACTIVITY_TIMEOUT:2m}
     # while no agent has accepted, send the customer a "still waiting" message this often (0 = off)
     waiting-reminder: ${HANDOVER_WAITING_REMINDER:60s}
+    # where agents work: console (our /agent page) or botpress-desk (docs/agent-inbox-switch.md)
+    inbox: ${AGENT_INBOX:console}
   attachment:
     # customer uploads (JPG / PNG / PDF, max 5 MB) are deleted automatically after this many days
     retention-days: ${ATTACHMENT_RETENTION_DAYS:30}
@@ -55,6 +57,8 @@ app:
       host: ${CLAMAV_HOST:localhost}
       port: ${CLAMAV_PORT:3310}
       timeout: 10s
+  # how agents reach this backend; used for the file links posted to Botpress Desk
+  public-base-url: ${PUBLIC_BASE_URL:http://localhost:8080}
   agent:
     # R&D: one account for the built-in agent console (/agent). If no password is set, one is generated and logged.
     username: ${AGENT_USERNAME:agent}

@@ -44,6 +44,12 @@ public class ChatSessionStore {
         return Optional.of(entry.session());
     }
 
+    /** Returns the session without extending its lifetime. */
+    public Optional<ChatSession> peek(String sessionId) {
+        Entry entry = sessions.get(sessionId);
+        return entry == null || entry.expiresAt().isBefore(Instant.now()) ? Optional.empty() : Optional.of(entry.session());
+    }
+
     /**
      * Returns the session for this id, creating it when missing. A known id that is not in memory
      * (expired, or lost on restart) is kept, so an open handover in the database still matches it.

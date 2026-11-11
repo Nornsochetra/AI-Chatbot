@@ -24,6 +24,7 @@ Customers chat through a custom widget. A Spring Boot backend sits between the w
 | Text chat through Botpress (Khmer and English) | Done |
 | Input masking (OTP, PIN, CVV, passwords, card / account numbers, phone numbers) | Done |
 | Live agent handover with a built-in agent console at `/agent` | Done |
+| Switchable agent inbox: our console or Botpress Desk (`AGENT_INBOX`); customer files stay on our server in both | Done |
 | Waiting-for-agent messages: welcome message, live queue position, "agents are busy" reminder | Done |
 | Real-time updates (Server-Sent Events) and typing indicators on both sides | Done |
 | Post-chat rating (agent and AI chats) | Done |
@@ -75,6 +76,8 @@ Flyway creates the tables on first start. The backend runs on `http://localhost:
 | `GEMINI_API_KEY` | Voice; empty turns voice off (the endpoints answer 503) |
 | `HANDOVER_AUTO_CLOSE`, `HANDOVER_INACTIVITY_TIMEOUT` | Auto-close live chats after customer inactivity (off by default: only the agent closes a chat) |
 | `HANDOVER_WAITING_REMINDER` | While no agent has accepted, remind the customer this often (default `60s`, `0` = off) |
+| `AGENT_INBOX` | Where agents work: `console` (default, our `/agent` page) or `botpress-desk` |
+| `PUBLIC_BASE_URL` | How agents reach this backend (default `http://localhost:8080`); Desk mode posts file links to it |
 | `ATTACHMENT_RETENTION_DAYS` | Uploaded files are deleted after this many days (default 30) |
 | `CLAMAV_ENABLED`, `CLAMAV_HOST`, `CLAMAV_PORT` | ClamAV virus scan (off until installed) |
 | `AGENT_USERNAME`, `AGENT_PASSWORD` | Agent console login; an empty password is generated and printed in the log |
@@ -112,6 +115,7 @@ Open `http://localhost:8080/agent` and sign in with `AGENT_USERNAME` / `AGENT_PA
 |---|---|
 | `POST /api/v1/chat/messages` | Send a customer message, get the bot reply |
 | `POST /api/v1/chat/handover` | Ask for a live agent (returns the queue position) |
+| `GET /api/v1/chat/config` | Widget settings (which agent inbox is used) |
 | `GET /api/v1/chat/sessions/{sessionId}/events` | Live updates (Server-Sent Events) |
 | `GET /api/v1/chat/sessions/{sessionId}/updates` | Live updates (polling fallback) |
 | `POST /api/v1/chat/sessions/{sessionId}/rating` | Submit a rating |
@@ -138,6 +142,8 @@ npm run typecheck
 - [docs/technology.md](docs/technology.md): stack, architecture, backend structure
 - [docs/flow.md](docs/flow.md): chat, voice, handover, rating flows
 - [docs/botpress-integration.md](docs/botpress-integration.md): how the backend calls Botpress
+- [docs/botpress-desk.md](docs/botpress-desk.md): Botpress Desk evaluation (why we keep our own agent console)
+- [docs/agent-inbox-switch.md](docs/agent-inbox-switch.md): switching between our console and Botpress Desk, including how customer files stay private in Desk mode
 - [docs/handover.md](docs/handover.md): live agent handover, real-time updates, waiting messages
 - [docs/rating.md](docs/rating.md): post-chat rating
 - [docs/voice.md](docs/voice.md): Gemini voice

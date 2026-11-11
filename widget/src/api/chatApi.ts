@@ -202,6 +202,17 @@ export async function sendTyping(apiBase: string, sessionId: string): Promise<vo
   await call(`${apiBase}/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/typing`, { method: 'POST' }, 5_000);
 }
 
+/** Backend setup the widget adapts to. */
+export interface ChatConfig {
+  agentInbox: 'CONSOLE' | 'BOTPRESS_DESK';
+  /** Botpress Desk: an agent can join any chat, so the live stream stays open while the bot is answering too */
+  agentMayJoinAnytime: boolean;
+}
+
+export function getChatConfig(apiBase: string, timeoutMs = 10_000): Promise<ChatConfig> {
+  return request(`${apiBase}/api/v1/chat/config`, { method: 'GET' }, timeoutMs);
+}
+
 export function getUpdates(apiBase: string, sessionId: string, after: number, timeoutMs = 10_000): Promise<SessionUpdates> {
   const url = `${apiBase}/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/updates?after=${after}`;
   return request(url, { method: 'GET' }, timeoutMs);

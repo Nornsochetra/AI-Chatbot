@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import com.kbprasac.chatbot.config.HandoverProperties;
 import com.kbprasac.chatbot.handover.mapper.HandoverMapper;
 import com.kbprasac.chatbot.handover.payload.request.AgentMessageRequest;
 import com.kbprasac.chatbot.handover.payload.response.HandoverDetailResponse;
@@ -27,12 +28,16 @@ import com.kbprasac.chatbot.handover.service.LiveUpdateService;
 import com.kbprasac.chatbot.rating.service.RatingService;
 import com.kbprasac.chatbot.shared.entity.Handover;
 import com.kbprasac.chatbot.shared.enums.HandoverCloseReason;
+import com.kbprasac.chatbot.shared.exception.ConflictException;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 
-/** Agent side (built-in agent console). Requires the AGENT role. */
+/**
+ * Agent side (built-in agent console). Requires the AGENT role.
+ * In Botpress Desk mode the console is read-only: accept, reply and close happen in Desk.
+ */
 @RestController
 @RequestMapping("/api/v1/agent/handovers")
 @Tag(name = "Handover (agent)")
@@ -42,13 +47,15 @@ public class AgentHandoverController {
     private final LiveUpdateService liveUpdates;
     private final RatingService ratingService;
     private final HandoverMapper mapper;
+    private final HandoverProperties props;
 
     public AgentHandoverController(HandoverService handoverService, LiveUpdateService liveUpdates,
-                                   RatingService ratingService, HandoverMapper mapper) {
+                                   RatingService ratingService, HandoverMapper mapper, HandoverProperties props) {
         this.handoverService = handoverService;
         this.liveUpdates = liveUpdates;
         this.ratingService = ratingService;
         this.mapper = mapper;
+        this.props = props;
     }
 
     @GetMapping(path = "/{id}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -89,18 +96,28 @@ public class AgentHandoverController {
     @PostMapping("/{id}/accept")
     @Operation(summary = "Take a waiting handover; the customer sees that an agent joined")
     public HandoverSummaryResponse accept(@PathVariable UUID id, Principal agent) {
+        requireConsoleInbox();
         return mapper.toSummary(handoverService.accept(id, agent.getName()));
     }
 
     @PostMapping("/{id}/messages")
     @Operation(summary = "Reply to the customer")
     public LiveMessageResponse reply(@PathVariable UUID id, @Valid @RequestBody AgentMessageRequest request) {
+        requireConsoleInbox();
         return mapper.toMessage(handoverService.agentMessage(id, request.text()));
     }
 
     @PostMapping("/{id}/close")
     @Operation(summary = "End the live chat; the customer goes back to the bot")
     public HandoverSummaryResponse close(@PathVariable UUID id) {
+        requireConsoleInbox();
         return mapper.toSummary(handoverService.close(id, HandoverCloseReason.AGENT_CLOSED));
+    }
+
+    private void requireConsoleInbox() {
+        if (props.deskMode()) {
+            throw new ConflictException("Agents use Botpress Desk (app.handover.inbox=botpress-desk); "
+                    + "accept, reply and close the chat there");
+        }
     }
 }

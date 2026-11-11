@@ -9,4 +9,7 @@ public interface BotEnginePort {
 
     /** Returns the bot reply, or empty when no reply arrived in time. */
     Optional<String> ask(BotConversation conversation, String text);
+
+    /** Posts a message as the customer without waiting for a reply (Botpress Desk mode: text for the agent). */
+    void send(BotConversation conversation, String text);
 }

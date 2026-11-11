@@ -70,7 +70,7 @@ class HandoverServiceTest {
 
     private HandoverService serviceWith(boolean autoClose, Duration waitingReminder) {
         return new HandoverService(handoverRepository, messageRepository, chatEventRepository, helpdesk,
-                new HandoverProperties(autoClose, Duration.ofMinutes(2), waitingReminder), events);
+                new HandoverProperties(autoClose, Duration.ofMinutes(2), waitingReminder, null), events);
     }
 
     private Handover waitingSince(Duration ago, Instant lastReminder) {
@@ -303,6 +303,43 @@ class HandoverServiceTest {
         service.close(handover(HandoverStatus.ACTIVE, Instant.now()).getId(), HandoverCloseReason.AGENT_CLOSED);
 
         verify(events, never()).publishEvent(new QueueChangedEvent());
+    }
+
+    @Test
+    void deskAgentTakeoverOpensAnActiveHandoverWithoutATicket() {
+        when(handoverRepository.findFirstBySessionIdAndStatusInOrderByCreatedAtDesc(eq("s1"), any()))
+                .thenReturn(Optional.empty());
+
+        Handover h = service.startByAgent("s1", Channel.WEBSITE, "Sokha");
+
+        assertEquals(HandoverStatus.ACTIVE, h.getStatus());
+        assertEquals(HandoverReason.AGENT_INITIATED, h.getReason());
+        assertEquals("Sokha", h.getAgentName());
+        HandoverMessage joined = savedMessages().get(0);
+        assertEquals("AGENT_JOINED", joined.getText());
+        assertEquals("Sokha", joined.getSenderName());
+        verify(helpdesk, never()).ticketOpened(any(), any());
+    }
+
+    @Test
+    void recordedCustomerMessageIsNotForwardedAgain() {
+        Handover h = handover(HandoverStatus.ACTIVE, Instant.now());
+
+        service.recordCustomerMessage(h, "hello");
+
+        assertEquals("hello", savedMessages().get(0).getText());
+        verify(helpdesk, never()).customerMessage(any(), any());
+    }
+
+    @Test
+    void customerUploadIsReportedToTheHelpdesk() {
+        Handover h = handover(HandoverStatus.ACTIVE, Instant.now());
+        com.kbprasac.chatbot.shared.entity.Attachment file = com.kbprasac.chatbot.shared.entity.Attachment.builder()
+                .id(UUID.randomUUID()).handoverId(h.getId()).fileName("id.jpg").build();
+
+        service.customerAttachment(h, file);
+
+        verify(helpdesk).customerAttachment(h, file);
     }
 
     @Test

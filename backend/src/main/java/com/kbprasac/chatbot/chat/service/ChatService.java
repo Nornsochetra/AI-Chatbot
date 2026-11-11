@@ -26,6 +26,7 @@ public class ChatService {
             "Sorry, I can't answer right now. Would you like to talk to a live agent? / "
                     + "សូមអភ័យទោស ខ្ញុំមិនអាចឆ្លើយបានទេ។ តើអ្នកចង់និយាយជាមួយភ្នាក់ងារផ្ទាល់ទេ?";
 
+    private final BotConversations conversations;
     private final BotEnginePort botEngine;
     private final ChatSessionStore sessionStore;
     private final InputMaskingService masking;
@@ -33,9 +34,11 @@ public class ChatService {
     private final ChatEventRepository eventRepository;
     private final ChatMapper mapper;
 
-    public ChatService(BotEnginePort botEngine, ChatSessionStore sessionStore, InputMaskingService masking,
-                       HandoverService handoverService, ChatEventRepository eventRepository, ChatMapper mapper) {
+    public ChatService(BotEnginePort botEngine, BotConversations conversations, ChatSessionStore sessionStore,
+                       InputMaskingService masking, HandoverService handoverService,
+                       ChatEventRepository eventRepository, ChatMapper mapper) {
         this.botEngine = botEngine;
+        this.conversations = conversations;
         this.sessionStore = sessionStore;
         this.masking = masking;
         this.handoverService = handoverService;
@@ -58,6 +61,16 @@ public class ChatService {
 
         MaskResult masked = masking.mask(request.text());
         Optional<String> reply = askBot(session, masked.text());
+        if (reply.isEmpty()) {
+            // Botpress Desk: an agent took the chat over while we waited for the bot (the bot then stays silent).
+            // The agent already saw the message in Desk; keep it in our record without forwarding it again.
+            Optional<Handover> joined = handoverService.findOpen(session.sessionId());
+            if (joined.isPresent()) {
+                handoverService.recordCustomerMessage(joined.get(), masking.maskSecrets(request.text()).text());
+                return mapper.toResponse(session.sessionId(), null, null, SessionState.HUMAN_ACTIVE, false,
+                        masked.changed());
+            }
+        }
         boolean handoverSuggested = reply.isEmpty();
         String replyText = reply.orElse(FALLBACK_REPLY);
 
@@ -69,12 +82,7 @@ public class ChatService {
 
     private Optional<String> askBot(ChatSession session, String text) {
         try {
-            BotConversation conversation = session.conversation();
-            if (conversation == null) {
-                conversation = botEngine.openConversation();
-                sessionStore.save(session.withConversation(conversation));
-            }
-            return botEngine.ask(conversation, text);
+            return botEngine.ask(conversations.ensure(session), text);
         } catch (RuntimeException e) {
             log.warn("Bot engine call failed for session {}", session.sessionId(), e);
             return Optional.empty();

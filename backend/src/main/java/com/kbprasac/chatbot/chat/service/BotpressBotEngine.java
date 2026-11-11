@@ -53,14 +53,7 @@ public class BotpressBotEngine implements BotEnginePort {
 
     @Override
     public Optional<String> ask(BotConversation c, String text) {
-        JsonNode sent = client.post().uri("/messages")
-                .header(USER_KEY_HEADER, c.userKey())
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of(
-                        "conversationId", c.conversationId(),
-                        "payload", Map.of("type", "text", "text", text)))
-                .retrieve().body(JsonNode.class);
-        Instant sentAt = Instant.parse(sent.path("message").path("createdAt").asText());
+        Instant sentAt = Instant.parse(post(c, text).path("message").path("createdAt").asText());
 
         long deadline = System.currentTimeMillis() + props.replyTimeoutMs();
         while (System.currentTimeMillis() < deadline) {
@@ -73,13 +66,29 @@ public class BotpressBotEngine implements BotEnginePort {
         return Optional.empty();
     }
 
+    @Override
+    public void send(BotConversation c, String text) {
+        post(c, text);
+    }
+
+    private JsonNode post(BotConversation c, String text) {
+        return client.post().uri("/messages")
+                .header(USER_KEY_HEADER, c.userKey())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of(
+                        "conversationId", c.conversationId(),
+                        "payload", Map.of("type", "text", "text", text)))
+                .retrieve().body(JsonNode.class);
+    }
+
     private List<String> botRepliesSince(BotConversation c, Instant since) {
         JsonNode body = client.get().uri("/conversations/{id}/messages", c.conversationId())
                 .header(USER_KEY_HEADER, c.userKey())
                 .retrieve().body(JsonNode.class);
         List<String> replies = new ArrayList<>();
         for (JsonNode m : body.path("messages")) {
-            boolean fromBot = !c.userId().equals(m.path("userId").asText());
+            // Botpress Desk agent replies and handoff notices also use the bot's user id; they are not answers
+            boolean fromBot = !c.userId().equals(m.path("userId").asText()) && BotpressMessages.isBotAnswer(m);
             boolean isNew = Instant.parse(m.path("createdAt").asText()).isAfter(since);
             JsonNode payload = m.path("payload");
             if (fromBot && isNew && "text".equals(payload.path("type").asText())) {

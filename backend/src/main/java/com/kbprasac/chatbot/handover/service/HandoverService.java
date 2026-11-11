@@ -84,12 +84,42 @@ public class HandoverService {
         return handoverRepository.findFirstBySessionIdAndStatusInOrderByCreatedAtDesc(sessionId, OPEN);
     }
 
+    /**
+     * Botpress Desk: an agent joined a bot chat the customer had not escalated. The handover starts as ACTIVE;
+     * Desk already has the ticket, so the helpdesk is not told.
+     */
+    @Transactional
+    public Handover startByAgent(String sessionId, Channel channel, String agentName) {
+        return findOpen(sessionId).orElseGet(() -> {
+            Instant now = Instant.now();
+            Handover handover = handoverRepository.save(Handover.builder()
+                    .id(UUID.randomUUID())
+                    .sessionId(sessionId)
+                    .channel(channel)
+                    .status(HandoverStatus.ACTIVE)
+                    .reason(HandoverReason.AGENT_INITIATED)
+                    .agentName(agentName)
+                    .createdAt(now)
+                    .acceptedAt(now)
+                    .lastCustomerActivityAt(now)
+                    .build());
+            addSystemMessage(handover, SystemMessageCode.AGENT_JOINED);
+            return handover;
+        });
+    }
+
     @Transactional
     public void customerMessage(Handover handover, String maskedText) {
+        recordCustomerMessage(handover, maskedText);
+        helpdesk.customerMessage(handover, maskedText);
+    }
+
+    /** A customer message the agent already received another way (Botpress Desk shows the bot conversation). */
+    @Transactional
+    public void recordCustomerMessage(Handover handover, String maskedText) {
         handover.setLastCustomerActivityAt(Instant.now());
         handoverRepository.save(handover);
         addMessage(handover, MessageSender.CUSTOMER, maskedText);
-        helpdesk.customerMessage(handover, maskedText);
     }
 
     /** The customer uploaded a file; it appears in the chat as a message pointing at the attachment. */
@@ -97,7 +127,9 @@ public class HandoverService {
     public HandoverMessage customerAttachment(Handover handover, Attachment attachment) {
         handover.setLastCustomerActivityAt(Instant.now());
         handoverRepository.save(handover);
-        return addMessage(handover, MessageSender.CUSTOMER, attachment.getFileName(), attachment);
+        HandoverMessage message = addMessage(handover, MessageSender.CUSTOMER, attachment.getFileName(), attachment);
+        helpdesk.customerAttachment(handover, attachment);
+        return message;
     }
 
     /** The agent removed a file; both sides see a "file removed" event pointing at it. */
