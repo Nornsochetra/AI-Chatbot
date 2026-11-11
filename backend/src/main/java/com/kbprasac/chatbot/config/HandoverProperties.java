@@ -11,7 +11,7 @@ import com.kbprasac.chatbot.shared.enums.AgentInbox;
  *                          only the agent closes the chat. The requirements ask for auto-close, so it can be switched on.
  * @param inactivityTimeout how long without a customer message before the automatic close (requirement: 2 minutes)
  * @param waitingReminder   while no agent has accepted, remind the customer this often (0 = off)
- * @param inbox             where agents work: our console (default) or Botpress Desk
+ * @param inbox             where agents work: Botpress Desk (default) or our console (kept, switched off)
  */
 @ConfigurationProperties(prefix = "app.handover")
 public record HandoverProperties(boolean autoCloseEnabled, Duration inactivityTimeout, Duration waitingReminder,
@@ -19,7 +19,7 @@ public record HandoverProperties(boolean autoCloseEnabled, Duration inactivityTi
 
     public HandoverProperties {
         if (inbox == null) {
-            inbox = AgentInbox.CONSOLE;
+            inbox = AgentInbox.BOTPRESS_DESK;
         }
     }
 

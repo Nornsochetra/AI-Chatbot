@@ -97,6 +97,59 @@ class InputMaskingServiceTest {
         assertTrue(r.text().endsWith(InputMaskingService.MASK), r.text());
     }
 
+    // --- voice transcripts (speech-to-text writes codes and keywords its own way) ---
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "My OTP is 1, 2, 3, 4, 5, 6",
+            "my OTP is 12, 34, 56",
+            "pin 4. 8. 2. 1",
+            "លេខសម្ងាត់ខ្ញុំគឺ ១, ២, ៣, ៤",
+            "The code you sent is 482193",
+            "my SMS code is 4821",
+            "កូដ 482193",
+            "My pen is 4821",
+            "my ping is 4821",
+            "bin number 4821",
+            "my O T P is 482193",
+            "o.t.p 482193",
+            "OTB 482193"
+    })
+    void masksVoiceStyleSecrets(String text) {
+        MaskResult r = service.mask(text);
+        assertTrue(r.changed(), "should mask: " + text);
+        assertTrue(r.text().endsWith(InputMaskingService.MASK), r.text());
+        assertTrue(service.maskSecrets(text).changed(), "agent must not see it either: " + text);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "My account number is 0, 0, 1, 2, 3, 4, 5, 6, 7",
+            "account 001, 234, 567"
+    })
+    void masksReadOutAccountNumbers(String text) {
+        assertTrue(service.mask(text).text().endsWith(InputMaskingService.MASK), service.mask(text).text());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "My OTP expired after 10, 15 minutes",
+            "error code 404",
+            "the code is not working",
+            "I need a pen",
+            "the OTP came 2 times",
+            "Can I open 2 accounts?"
+    })
+    void leavesVoiceStyleNormalTextUntouched(String text) {
+        assertFalse(service.mask(text).changed(), "should not mask: " + text);
+    }
+
+    @Test
+    void readOutCodeKeepsTheRestOfTheSentence() {
+        assertEquals("My OTP is " + InputMaskingService.MASK + ", it does not work",
+                service.mask("My OTP is 1, 2, 3, 4, 5, 6, it does not work").text());
+    }
+
     // --- account / card / ID numbers ---
 
     @Test

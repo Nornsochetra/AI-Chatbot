@@ -99,7 +99,8 @@ class BotpressDeskHelpdeskTest {
 
         String text = posted();
         assertTrue(text.contains("image, 240 KB"), text);
-        assertTrue(text.contains("https://chat.example/agent/file.html?handover=" + h.getId() + "&file=" + file.getId()), text);
+        assertTrue(text.contains("https://chat.example/agent/file.html?f=" + h.getId() + "." + file.getId()), text);
+        assertFalse(text.contains("&"), "Desk turns & in links into &amp;: " + text);
         assertFalse(text.contains("Sok_Dara"));
     }
 

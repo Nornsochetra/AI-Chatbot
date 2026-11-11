@@ -23,6 +23,17 @@ public class InputMaskingService {
         return DIGIT + "(?:[ -]?" + DIGIT + "){" + (min - 1) + ",}";
     }
 
+    /**
+     * A code read out in small groups, as speech-to-text writes it: "1, 2, 3, 4, 5, 6" or "12, 34, 56"
+     * (3+ groups of 1-4 digits split by commas or dots). Two groups ("10, 15 minutes") stay readable.
+     */
+    private static final String DICTATED = DIGIT + "{1,4}(?:\\s?[,.]\\s?" + DIGIT + "{1,4}){2,}";
+
+    /** Digits after a keyword: written ({@code min}+ digits) or read out in groups. */
+    private static String keyedDigits(int min) {
+        return "(?:" + digits(min) + "|" + DICTATED + ")";
+    }
+
     // Khmer has no word boundaries in regex, so Khmer keywords are matched without \b.
     private static final String SECRET_KEYWORDS =
             "\\b(?:otp|pin|cvv|cvc|password|passcode|security code|verification code)\\b"
@@ -34,7 +45,13 @@ public class InputMaskingService {
 
     // secret keyword + any digits after it (3+), e.g. "OTP 123456", "លេខសម្ងាត់ខ្ញុំគឺ ៤៨២១"
     private static final Pattern SECRET_WITH_KEYWORD = Pattern.compile(
-            "(?iu)(" + SECRET_KEYWORDS + ")(" + NOT_DIGIT + "{0,20})" + digits(3));
+            "(?iu)(" + SECRET_KEYWORDS + ")(" + NOT_DIGIT + "{0,20})" + keyedDigits(3));
+
+    // weaker hints, so 4+ digits are needed: "code" ("the code you sent is 482193") and words speech-to-text
+    // writes when a customer says PIN or OTP ("pen", "ping", "bin", "O T P")
+    private static final String LIKELY_SECRET_KEYWORDS = "\\b(?:code|pen|ping|bin|o[ .]?t[ .]?p|otb)\\b|កូដ";
+    private static final Pattern LIKELY_SECRET = Pattern.compile(
+            "(?iu)(" + LIKELY_SECRET_KEYWORDS + ")(" + NOT_DIGIT + "{0,20})" + keyedDigits(4));
 
     // "password is hunter2": the word after "password ... is / : / = / គឺ / ជា" is masked only when it
     // contains a digit or symbol, so "my password is not working" stays readable
@@ -55,7 +72,7 @@ public class InputMaskingService {
 
     // account / card / ID / passport keyword + 7+ digits (optional leading letter for passports)
     private static final Pattern ID_WITH_KEYWORD = Pattern.compile(
-            "(?iu)(" + ID_KEYWORDS + ")(" + NOT_DIGIT + "{0,20})[A-Za-z]?" + digits(7));
+            "(?iu)(" + ID_KEYWORDS + ")(" + NOT_DIGIT + "{0,20})(?:[A-Za-z]?" + digits(7) + "|" + DICTATED + ")");
 
     // Cambodian phone numbers: 0xx xxx xxx(x) or +855 xx xxx xxx(x), ASCII or Khmer digits
     private static final Pattern PHONE = Pattern.compile(
@@ -84,6 +101,7 @@ public class InputMaskingService {
 
     private static String maskSecretsIn(String text) {
         String masked = SECRET_WITH_KEYWORD.matcher(text).replaceAll("$1$2" + MASK);
+        masked = LIKELY_SECRET.matcher(masked).replaceAll("$1$2" + MASK);
         masked = TEXT_PASSWORD.matcher(masked).replaceAll("$1$2" + MASK);
         masked = SECRET_NUMBER_WORDS.matcher(masked).replaceAll("$1$2" + MASK);
         return LONG_NUMBER.matcher(masked).replaceAll(MASK);

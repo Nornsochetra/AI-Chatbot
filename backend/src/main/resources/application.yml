@@ -46,8 +46,9 @@ app:
     inactivity-timeout: ${HANDOVER_INACTIVITY_TIMEOUT:2m}
     # while no agent has accepted, send the customer a "still waiting" message this often (0 = off)
     waiting-reminder: ${HANDOVER_WAITING_REMINDER:60s}
-    # where agents work: console (our /agent page) or botpress-desk (docs/agent-inbox-switch.md)
-    inbox: ${AGENT_INBOX:console}
+    # where agents work: botpress-desk (default) or console (our /agent page, kept but switched off;
+    # see docs/agent-inbox-switch.md)
+    inbox: ${AGENT_INBOX:botpress-desk}
   attachment:
     # customer uploads (JPG / PNG / PDF, max 5 MB) are deleted automatically after this many days
     retention-days: ${ATTACHMENT_RETENTION_DAYS:30}

@@ -32,7 +32,7 @@ import com.kbprasac.chatbot.shared.enums.MessageSender;
  * </ul>
  */
 @Component
-@ConditionalOnProperty(name = "app.handover.inbox", havingValue = "botpress-desk")
+@ConditionalOnProperty(name = "app.handover.inbox", havingValue = "botpress-desk", matchIfMissing = true)
 public class BotpressDeskHelpdesk implements HelpdeskPort {
 
     private static final Logger log = LoggerFactory.getLogger(BotpressDeskHelpdesk.class);
@@ -97,8 +97,9 @@ public class BotpressDeskHelpdesk implements HelpdeskPort {
     String fileNotice(Attachment attachment) {
         String kind = attachment.getContentType().startsWith("image/") ? "image" : "PDF";
         return "📎 Customer sent a file (" + kind + ", " + size(attachment.getSizeBytes()) + "). "
-                + "Open it securely (agent sign-in required): " + publicBaseUrl + "/agent/file.html?handover="
-                + attachment.getHandoverId() + "&file=" + attachment.getId();
+                // one parameter without "&": Desk shows "&" in links as "&amp;", which breaks a second parameter
+                + "Open it securely (agent sign-in required): " + publicBaseUrl + "/agent/file.html?f="
+                + attachment.getHandoverId() + "." + attachment.getId();
     }
 
     private void post(Handover handover, String text) {

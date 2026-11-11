@@ -35,7 +35,7 @@ import jakarta.annotation.PreDestroy;
  * sessions are in memory, so streams are not resumed after a restart.
  */
 @Component
-@ConditionalOnProperty(name = "app.handover.inbox", havingValue = "botpress-desk")
+@ConditionalOnProperty(name = "app.handover.inbox", havingValue = "botpress-desk", matchIfMissing = true)
 public class BotpressDeskListener {
 
     private static final Logger log = LoggerFactory.getLogger(BotpressDeskListener.class);

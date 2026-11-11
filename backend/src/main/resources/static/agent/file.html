@@ -82,13 +82,16 @@
   </div>
 
 <script>
-// Opened from the link that Botpress Desk mode posts to the agent: /agent/file.html?handover=<id>&file=<id>.
+// Opened from the link that Botpress Desk mode posts to the agent: /agent/file.html?f=<handover id>.<file id>.
+// One parameter, no "&": Desk shows an "&" in a link as "&amp;", which broke the older two-parameter links.
 // The file never goes to Botpress; this page fetches it with the agent login, and the backend audits each view.
 (() => {
   const $ = (id) => document.getElementById(id);
   const params = new URLSearchParams(location.search);
-  const handoverId = params.get('handover');
-  const fileId = params.get('file');
+  const [handoverId, fileId] = params.has('f')
+    ? params.get('f').split('.')
+    // links posted before: ?handover=<id>&file=<id>, as Desk turned them into ?handover=<id>&amp;file=<id>
+    : [params.get('handover'), params.get('file') || params.get('amp;file')];
   const url = `/api/v1/agent/handovers/${encodeURIComponent(handoverId || '')}/attachments/${encodeURIComponent(fileId || '')}`;
   let auth = null;
   let objectUrl = null;

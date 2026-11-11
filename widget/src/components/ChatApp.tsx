@@ -22,6 +22,7 @@ import {
 import { messagesFor, type Messages } from '../i18n';
 import type { Lang, WidgetConfig } from '../lib/config';
 import { newId } from '../lib/ids';
+import { waveformPeaks } from '../lib/waveform';
 import {
   chatReducer,
   currentAgentName,
@@ -31,7 +32,7 @@ import {
   type ChatMessage,
 } from '../state/chatReducer';
 import { ChatHeader } from './ChatHeader';
-import { Composer } from './Composer';
+import { Composer, MAX_LENGTH } from './Composer';
 import { MessageList } from './MessageList';
 import { Notice } from './Notice';
 import type { SpeakState } from './SpeakButton';
@@ -275,9 +276,41 @@ export function ChatApp({ config }: { config: WidgetConfig }) {
     dispatch({ type: 'attachment_sent', id: newId(), response, previewUrl });
   }
 
-  async function send(text: string, retryId?: string) {
+  // the customer's recordings, played back from their own device; released when the chat closes
+  const voiceUrlsRef = useRef<string[]>([]);
+  useEffect(() => {
+    const urls = voiceUrlsRef.current;
+    return () => urls.forEach((url) => URL.revokeObjectURL(url));
+  }, []);
+
+  /**
+   * Voice message: the bubble (waveform + "turning your voice into text…") appears at once, then the
+   * transcript fills in and goes the normal text path (masking, Botpress or the live agent).
+   * Only the transcript leaves the browser as a message; the recording itself is not stored anywhere.
+   */
+  async function sendVoice(audio: Blob, seconds: number) {
+    const id = newId();
+    const url = URL.createObjectURL(audio);
+    voiceUrlsRef.current.push(url);
+    dispatch({ type: 'voice_recorded', id, voice: { url, seconds, peaks: await waveformPeaks(audio) } });
+    let transcript: string;
+    try {
+      transcript = (await transcribe(config.apiBase, audio)).trim().slice(0, MAX_LENGTH);
+    } catch (e) {
+      dispatch({ type: 'voice_failed', id });
+      throw e;
+    }
+    if (!transcript) {
+      dispatch({ type: 'voice_failed', id });
+      throw new ChatApiError('validation', 'no speech');
+    }
+    dispatch({ type: 'voice_transcribed', id, text: transcript });
+    await send(transcript, id, false);
+  }
+
+  async function send(text: string, retryId?: string, newBubble = !retryId) {
     const id = retryId ?? newId();
-    dispatch({ type: 'send_start', id, text, retry: Boolean(retryId) });
+    dispatch({ type: 'send_start', id, text, retry: !newBubble });
     try {
       const response = await sendMessage(config.apiBase, { sessionId: state.sessionId, channel: config.channel, text });
       dispatch({ type: 'send_success', userMessageId: id, botMessageId: newId(), response });
@@ -357,7 +390,7 @@ export function ChatApp({ config }: { config: WidgetConfig }) {
         t={t}
         disabled={busy}
         onSend={(text) => void send(text)}
-        onTranscribe={(audio) => transcribe(config.apiBase, audio)}
+        onVoice={sendVoice}
         onTyping={notifyTyping}
         // files only while a live agent is chatting: the AI must not receive personal data
         onAttach={state.mode === 'agent' ? attach : undefined}

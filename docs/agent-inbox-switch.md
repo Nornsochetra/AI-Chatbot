@@ -2,12 +2,20 @@
 
 Status: **implemented and tested end to end on 2026-11-11** (steps 0–3 of section 7). Background: the Botpress Desk evaluation in [botpress-desk.md](botpress-desk.md).
 
+**Update (2026-11-11): Botpress Desk is now the default, and our console is switched off.** The console code is kept, not removed. With the default `botpress-desk`:
+
+- the console page (`/agent`, `/agent/index.html`) answers 404 (`ConsolePageFilter`);
+- the console API (`AgentHandoverController`: queue, accept, reply, typing, close, live stream) is not loaded, so it answers 404 and is not listed in Swagger;
+- `BuiltInHelpdesk` is not loaded; the Desk classes are.
+
+Still on in Desk mode: the agent sign-in, the secure file page `/agent/file.html` and its file endpoints (`AgentAttachmentController`), which Desk messages link to. To bring the console back, set `AGENT_INBOX=console` and restart.
+
 ## 1. Goal
 
 Let a deployment choose where live agents work, with one setting:
 
-- **`console`** (today): our own agent console at `/agent` ([handover.md](handover.md)).
-- **`botpress-desk`**: Botpress Desk (`desk.botpress.cloud`).
+- **`botpress-desk`** (default): Botpress Desk (`desk.botpress.cloud`).
+- **`console`** (kept, switched off): our own agent console at `/agent` ([handover.md](handover.md)).
 
 The backend already has the switch point. Handover code talks to the agent inbox only through the `HelpdeskPort` interface (`ticketOpened`, `customerMessage`, `ticketClosed`). Today its only implementation is `BuiltInHelpdesk`. Desk mode adds a second implementation, picked by the setting.
 
@@ -16,10 +24,10 @@ The backend already has the switch point. Handover code talks to the agent inbox
 ```yaml
 app:
   handover:
-    inbox: ${AGENT_INBOX:console}   # console | botpress-desk
+    inbox: ${AGENT_INBOX:botpress-desk}   # botpress-desk | console
 ```
 
-In `backend/.env`: `AGENT_INBOX=botpress-desk`. Restart the backend to switch. The default stays `console`.
+The default is `botpress-desk`. To use our console instead, put `AGENT_INBOX=console` in `backend/.env` and restart the backend.
 
 Desk mode also needs `PUBLIC_BASE_URL`: the address agents use to reach this backend (default `http://localhost:8080`). File links posted to Desk point there.
 
@@ -87,7 +95,8 @@ Customer (widget)        Our backend                         Botpress Desk      
 
 1. **The customer uploads in our widget,** exactly as today ([attachments-simple.md](attachments-simple.md)): JPG / PNG / PDF up to 5 MB, content-type check, virus scan, saved in our database. Uploads stay allowed only while an agent has the chat, so the bot is already paused when the notice is posted.
 2. **The backend posts only a text line** to the Botpress conversation, as a customer message:
-   `📎 Customer sent a file (image, 240 KB). Open it securely (agent sign-in required): <PUBLIC_BASE_URL>/agent/file.html?handover=<id>&file=<id>`
+   `📎 Customer sent a file (image, 240 KB). Open it securely (agent sign-in required): <PUBLIC_BASE_URL>/agent/file.html?f=<handover id>.<file id>`
+   (One parameter without `&`: Desk shows an `&` in a link as `&amp;`, which broke the first two-parameter links. The page still opens those older links.)
    - **No original file name.** A name like `ID_<customer name>.jpg` would leak personal data. Only the type and size are sent.
    - **The link holds random IDs,** not the file.
 3. **The agent clicks the link in Desk** and our own file page opens:
@@ -179,3 +188,4 @@ Unit tests: `BotpressDeskHelpdeskTest`, `BotpressDeskEventsTest` (event shapes c
 - **If our side closes the chat** (auto-close, off by default), the Desk ticket stays open and the bot stays silent until the agent closes it; the agent gets a "[Chat ended]" line asking them to.
 - **The `/agent` console on an older backend** does not know the `AGENT_INITIATED` reason; restart every backend on the same database after upgrading.
 - **The bot's own text** (name, greeting, knowledge) comes from Botpress Studio, not from this repo.
+- **Agents sign in again to open each file in a new tab.** The file page cannot reuse the Desk login (Desk does not share its login with outside pages). This is intended: the link alone must never open a customer file. Planned: one sign-in per shift through the admin portal, see [flow.md section 8](flow.md#8-admin-portal).

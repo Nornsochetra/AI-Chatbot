@@ -5,6 +5,7 @@ import type { ChatMessage } from '../state/chatReducer';
 import { HandoverPrompt } from './HandoverPrompt';
 import { Notice } from './Notice';
 import { SpeakButton, type SpeakState } from './SpeakButton';
+import { VoiceNote } from './VoiceNote';
 
 interface Props {
   message: ChatMessage;
@@ -51,6 +52,23 @@ export function MessageBubble({ message, t, onTalkToAgent, onSpeak, speakState }
           </div>
           {file.removed && <div className="kb-file__status">{t.attachRemoved}</div>}
         </div>
+      </div>
+    );
+  }
+
+  if (message.role === 'user' && message.voice) {
+    // voice message: what we understood on top, the recording below
+    return (
+      <div className="kb-row kb-row--user">
+        <div className="kb-bubble kb-bubble--user kb-bubble--voice">
+          {message.voice.transcribing ? (
+            <div className="kb-voice__transcript kb-voice__transcript--pending">{t.voiceTranscribing}</div>
+          ) : (
+            <div className="kb-voice__transcript">{message.text}</div>
+          )}
+          <VoiceNote t={t} voice={message.voice} />
+        </div>
+        {message.masked && <Notice kind="info">{t.maskedNotice}</Notice>}
       </div>
     );
   }

@@ -18,15 +18,15 @@ interface Props {
   t: Messages;
   disabled: boolean;
   onSend: (text: string) => void;
-  /** speech-to-text; the transcript is put in the input box so the customer can check it before sending */
-  onTranscribe: (audio: Blob) => Promise<string>;
+  /** sends the recording as a voice message (shown with its transcript); rejects when nothing was understood */
+  onVoice: (audio: Blob, seconds: number) => Promise<void>;
   /** called on each keystroke (the parent throttles it), so a live agent can see the customer typing */
   onTyping?: () => void;
   /** file upload; only passed while a live agent is chatting (the AI must not receive files) */
   onAttach?: (file: File) => Promise<void>;
 }
 
-export function Composer({ t, disabled, onSend, onTranscribe, onTyping, onAttach }: Props) {
+export function Composer({ t, disabled, onSend, onVoice, onTyping, onAttach }: Props) {
   const [text, setText] = useState('');
   const [transcribing, setTranscribing] = useState(false);
   const [voiceNotice, setVoiceNotice] = useState<Notice>(null);
@@ -57,13 +57,7 @@ export function Composer({ t, disabled, onSend, onTranscribe, onTyping, onAttach
     }
     setTranscribing(true);
     try {
-      const transcript = (await onTranscribe(audio)).trim();
-      if (!transcript) {
-        setVoiceNotice('noSpeech');
-        return;
-      }
-      setText((current) => (current.trim() ? `${current.trim()} ${transcript}` : transcript).slice(0, MAX_LENGTH));
-      inputRef.current?.focus();
+      await onVoice(audio, seconds);
     } catch (e) {
       setVoiceNotice(e instanceof ChatApiError && e.kind === 'validation' ? 'noSpeech' : 'unavailable');
     } finally {
@@ -174,7 +168,8 @@ export function Composer({ t, disabled, onSend, onTranscribe, onTyping, onAttach
             type="button"
             className={`kb-mic ${recorder.recording ? 'kb-mic--recording' : ''}`}
             onClick={() => void toggleRecording()}
-            disabled={transcribing}
+            // no new recording while the last one or the bot's answer is still on its way
+            disabled={transcribing || (disabled && !recorder.recording)}
             aria-pressed={recorder.recording}
             aria-label={recorder.recording ? t.voiceStop : t.voiceStart}
             title={recorder.recording ? t.voiceStop : t.voiceStart}
@@ -213,7 +208,7 @@ export function Composer({ t, disabled, onSend, onTranscribe, onTyping, onAttach
       <div className="kb-composer__meta">
         {recorder.recording ? (
           <span className="kb-recording" role="status">
-            ● {t.voiceRecording} {recorder.elapsed}s / {MAX_RECORDING_SECONDS}s
+            ● {t.voiceRecording} {recorder.elapsed}s / {MAX_RECORDING_SECONDS}s · {t.voiceSafety}
           </span>
         ) : voiceNotice ? (
           <span className="kb-voice-notice" role="status">

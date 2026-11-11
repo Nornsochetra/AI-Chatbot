@@ -21,20 +21,44 @@ Spring: output check → log event to Postgres → stream to widget (SSE)
 - If Botpress is slow or down, the circuit breaker returns a fallback message and offers the live agent.
 - The bot must not give customer-specific financial data or personalized eligibility, rate or approval claims. This is configured in Botpress instructions and checked on output.
 
-## 2. Voice input (speech-to-text)
+## 2. Voice input (voice message)
 
 ```
-User taps mic → widget records audio → Spring BFF
+Customer taps 🎤 → records (max 60 s) → taps ■
+   │
    ▼
-Gemini API: audio → text (Khmer or English)
+Widget (in the browser)
+   ├─ keeps the recording on the device (for ▶ playback only)
+   ├─ draws the waveform from the recording
+   └─ shows the voice bubble at once:
+        ┌──────────────────────────────────────┐
+        │ Turning your voice into text…        │
+        │ ▶  ▍▌▍▋▌▍▍▋▌▍▌▍▋▍▌             0:05  │
+        └──────────────────────────────────────┘
+   │ audio
    ▼
-Text continues through Flow 1 (guardrail → Botpress → reply)
+Spring BFF  POST /speech/transcriptions  (checks format, ≤ 5 MB)
+   ▼
+Gemini: audio → text (Khmer or English, numbers as digits)
+   │ transcript (audio is not stored, transcript is not logged)
+   ▼
+Widget: the transcript replaces "Turning your voice into text…"
+        ┌──────────────────────────────────────┐
+        │ What time do branches open?          │
+        │ ▶  ▍▌▍▋▌▍▍▋▌▍▌▍▋▍▌             0:05  │
+        └──────────────────────────────────────┘
+   │ the transcript is sent as the message
+   ▼
+Flow 1, unchanged: masking → Botpress → bot reply
+   (or, during a live chat: masking for secrets → the agent sees the text)
 ```
 
-- Typing stays available if voice fails.
-- Masking runs on the transcript, because spoken digits can still contain card numbers.
-- Raw audio is not stored.
-- Current R&D implementation: the transcript goes into the customer's input box; they check it and press Send, so it follows Flow 1 exactly. Gemini is asked to write numbers as digits so masking catches them. Details: [voice.md](voice.md).
+- Nothing understood (silence, too short, error) → the bubble is removed and the composer says "We didn't catch that…" or "Voice isn't available right now…". Typing always stays available.
+- Masking runs on the transcript, because spoken digits can still contain card numbers; the masking notice shows under the bubble as for typed text.
+- The bot and the agent receive the transcript only, never the audio.
+- ▶ replays the customer's own recording from their device. After a page reload the bubble keeps its transcript and waveform, but can no longer play.
+- Trade-off: a recognition mistake cannot be fixed before sending; the customer sees the transcript in the bubble and can type a correction.
+- Details: [voice.md](voice.md).
 
 ## 3. Voice output (read-aloud)
 
@@ -115,6 +139,29 @@ Admin logs in (2FA, IP whitelist)
 ```
 
 Data comes from our Postgres events, optionally enriched from Botpress analytics.
+
+### Customer files: one sign-in through the admin portal (planned)
+
+Today an agent who clicks a file link in Botpress Desk signs in on `/agent/file.html` with the shared agent account, and the sign-in lasts until that browser tab is closed. The sign-in itself stays (the link sits in every Desk chat and in browser history, so the link alone must never open a customer file), but with the admin portal the agent signs in **once per shift**:
+
+```
+Agent signs in to the admin portal once (per-agent account, 2FA)
+   │ secure session cookie (HttpOnly, expires after a shift)
+   ▼
+In Desk: clicks "📎 Customer sent a file…"
+   ▼
+/agent/file.html on the same domain → the browser already has the session
+   ├─ signed in  → the file opens at once; the audit log records that agent by name
+   └─ not signed in → admin portal login → back to the file
+```
+
+What this needs:
+1. The admin portal and the file page on the **same domain** (`PUBLIC_BASE_URL`), so the browser sends the portal session with the file request.
+2. A **session login** (cookie) replacing the per-tab HTTP Basic sign-in the file page uses today; the file page checks the session and redirects to the portal login when there is none.
+3. **One account per agent** instead of the shared `AGENT_USERNAME` / `AGENT_PASSWORD`, with roles deciding who may open files, so the audit log names the person.
+4. Optional: a screen in the portal listing each chat's files, so agents do not depend on the Desk link.
+
+Until the portal exists, a possible stopgap is to keep the file page sign-in for about 8 hours on that computer instead of per tab.
 
 ## 9. Session states
 

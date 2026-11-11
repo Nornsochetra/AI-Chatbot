@@ -27,7 +27,7 @@ import com.kbprasac.chatbot.shared.enums.HandoverStatus;
  * (our rating card is used instead).
  */
 @Component
-@ConditionalOnProperty(name = "app.handover.inbox", havingValue = "botpress-desk")
+@ConditionalOnProperty(name = "app.handover.inbox", havingValue = "botpress-desk", matchIfMissing = true)
 public class BotpressDeskEvents {
 
     private static final Logger log = LoggerFactory.getLogger(BotpressDeskEvents.class);

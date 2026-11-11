@@ -22,10 +22,11 @@ Our backend  POST /speech/transcriptions        Our backend  POST /sessions/{id}
 Gemini gemini-3.8-flash (audio → text)             ▼
    │                                            Gemini gemini-3.8-flash-tts (text → WAV)
    ▼                                               │
-Transcript → the customer's input box              ▼
-   │ customer checks / edits, presses Send      WAV → played in the widget, text stays visible
+Voice message bubble: transcript on top,          ▼
+waveform + play button below (sent at once)     WAV → played in the widget, text stays visible
+   │ the transcript is the message
    ▼
-normal chat path (masking → Botpress)
+normal chat path (masking → Botpress or the live agent)
 ```
 
 Decisions:
@@ -33,7 +34,8 @@ Decisions:
 | Decision | Why |
 |---|---|
 | The browser never calls Gemini; our backend does | The API key stays on the server; we control limits and logging |
-| The transcript goes into the input box, the customer presses Send | They can fix recognition mistakes; the normal path (masking, logging, handover rules) applies unchanged. Answers feasibility question 8 ("is the transcription shown in the UI?"): yes |
+| Stopping the recording sends a **voice message** at once (like messaging apps); the bubble shows the transcript above a waveform the customer can play back | Customers expect voice to be sent as voice, not to land in the text box. The transcript is what is sent, so the normal path (masking, logging, handover rules) applies unchanged. Answers feasibility question 8 ("is the transcription shown in the UI?"): yes, in the bubble. Trade-off: a recognition mistake can no longer be fixed before sending; the customer sees the transcript and can type a correction |
+| The recording is played back from the customer's own device | No audio is uploaded for keeping; after a page reload the bubble keeps its transcript and waveform but can no longer play |
 | Read-aloud only for **stored bot replies of the same session** | The public endpoint cannot be used to synthesize arbitrary text on the bank's Gemini bill |
 | Numbers are transcribed as digits (prompt) | So "my OTP is one two three…" becomes digits and the existing masking catches it |
 | No audio is stored, no transcript is logged | Privacy; the transcript only becomes data when the customer sends it as a message |
@@ -71,7 +73,9 @@ Errors: 400 unsupported format / empty / malformed upload, 404 reply not found o
 
 - **Mic button** left of the input box (only shown when the browser supports recording on a secure page; `localhost` counts as secure).
   - Tap → recording (red, pulsing, "Recording… 5s / 60s"), tap ■ to stop; stops by itself at 60 s.
-  - Then "Turning your voice into text…" → the transcript appears in the input box (appended if text was already there).
+  - Then a voice message bubble appears right away: waveform, play button, length, and "Turning your voice into text…" on top. When the transcript arrives it replaces that line and is sent (the bot answers, or the live agent receives it as text). Text already typed in the input box is left alone.
+  - The play button replays the customer's own recording (one at a time); the played part of the waveform lights up. The waveform is computed in the browser from the recording.
+  - Nothing understood → the bubble is removed and the "We didn't catch that…" notice is shown. The mic is disabled while the last recording or the bot's answer is still on its way.
   - Blocked microphone → "Microphone access is blocked. You can type instead." No speech → "We didn't catch that…". Voice off / error → "Voice isn't available right now…".
 - **Read aloud** under every bot reply: tap → "Preparing audio…" → plays, button becomes "Stop". One reply plays at a time; audio is cached for the page so replaying is instant. Error → "Read-aloud isn't available right now."
 - The loader already gives the iframe microphone permission (`allow="microphone"`).
@@ -93,7 +97,7 @@ Errors: 400 unsupported format / empty / malformed upload, 404 reply not found o
 
 1. Put your key in `backend/.env`: `GEMINI_API_KEY=...`, restart the backend.
 2. Open `http://localhost:3000/`, open the chat, allow the microphone when the browser asks.
-3. Tap 🎤, say "តើសាខាបើកម៉ោងប៉ុន្មាន?", tap ■ → the text appears in the box → Send.
+3. Tap 🎤, say "តើសាខាបើកម៉ោងប៉ុន្មាន?", tap ■ → a voice message appears, its transcript fills in on top and the bot answers. Tap ▶ on the bubble to hear your recording.
 4. Under the bot's answer tap **Read aloud** / **អានឮៗ** → the answer is spoken.
 5. Try English, mixed Khmer / English, and a sentence with numbers ("my OTP is 1 2 3 4 5 6" → after Send, the masking notice should appear).
 
@@ -105,6 +109,8 @@ Quick backend check without the widget (after setting the key and restarting):
 - API key only in `backend/.env` / environment; sent to Gemini per request; never sent to the browser or logged.
 - Recordings are sent to Gemini and not stored; transcripts are not logged. Request bodies are never logged (they contain the customer's voice / text).
 - Read-aloud only for the session's own stored bot replies, max 2000 characters per request.
+- Sensitive data in speech: the transcript goes through the same masking as typed text. Masking also covers how speech-to-text writes things: codes read out in groups ("1, 2, 3, 4, 5, 6", "12, 34, 56", including Khmer digits), "code" followed by 4+ digits ("the code you sent is 482193"), and words written when a customer says PIN or OTP ("pen", "ping", "bin", "O T P") followed by 4+ digits. Two groups ("10, 15 minutes") stay readable. While recording, the widget says "Don't say your PIN, OTP or card number."
+- Not covered: a bare number with no keyword ("482193") is not masked, spoken or typed; and Gemini hears the audio before any masking. Only a local speech-to-text provider removes that risk.
 - Data leaves Cambodia (Gemini API): the same Security / Compliance approval question as Botpress.
 
 ## 9. Verification (2026-11-10)
@@ -135,6 +141,8 @@ Latency observed: transcription of a ~10 s clip took 11–21 s on `gemini-3.5-fl
 2. The mic and speaker buttons clicked through in a browser (the browser tool is disconnected).
 3. Safari (records MP4) and the mobile app webview (microphone permission inside the app).
 4. Latency when the models are not overloaded.
+
+**Voice messages (2026-11-11):** checked in Chrome against the running backend and Gemini, with Gemini read-aloud audio fed in as the microphone (12 s clip): the bubble appeared at once with the waveform and the Khmer "turning your voice into text…" line, the English transcript filled in on top, the bot answered, and ▶ played the recording back with the waveform lighting up. Widget tests: 42 (new: waveform bars, voice bubble states, reload keeps transcript but not the recording).
 
 ## 10. Open items
 

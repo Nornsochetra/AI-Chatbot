@@ -1,6 +1,6 @@
 # AI Chatbot: Botpress Desk Evaluation
 
-Status: tested 2026-11-11. **Decision: our own agent console stays the default. Botpress Desk is now available as an option (`AGENT_INBOX=botpress-desk`), see [agent-inbox-switch.md](agent-inbox-switch.md).**
+Status: tested 2026-11-11. **Decision (updated the same day): Botpress Desk is the default agent inbox. Our own console is kept in the code but switched off (`AGENT_INBOX=console` brings it back), see [agent-inbox-switch.md](agent-inbox-switch.md).** Sections 5–7 below record the original evaluation.
 
 ## 1. Question
 

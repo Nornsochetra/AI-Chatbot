@@ -12,7 +12,7 @@ Customers chat through a custom widget. A Spring Boot backend sits between the w
                 Spring Boot backend (BFF)
    ┌───────────┬──────────┼───────────┬─────────────┐
  Session     Guardrails  Bot engine  Speech        Handover
- (memory)    (masking)   (Botpress)  (Gemini)      (agent console)
+ (memory)    (masking)   (Botpress)  (Gemini)      (Botpress Desk)
                           |
      PostgreSQL: chat events, handovers, ratings, attachments, audit
 ```
@@ -23,8 +23,8 @@ Customers chat through a custom widget. A Spring Boot backend sits between the w
 |---|---|
 | Text chat through Botpress (Khmer and English) | Done |
 | Input masking (OTP, PIN, CVV, passwords, card / account numbers, phone numbers) | Done |
-| Live agent handover with a built-in agent console at `/agent` | Done |
-| Switchable agent inbox: our console or Botpress Desk (`AGENT_INBOX`); customer files stay on our server in both | Done |
+| Live agent handover in **Botpress Desk** (default); customer files stay on our server and open through a secure link | Done |
+| Built-in agent console at `/agent` | Kept in the code, switched off (`AGENT_INBOX=console` brings it back) |
 | Waiting-for-agent messages: welcome message, live queue position, "agents are busy" reminder | Done |
 | Real-time updates (Server-Sent Events) and typing indicators on both sides | Done |
 | Post-chat rating (agent and AI chats) | Done |
@@ -76,11 +76,11 @@ Flyway creates the tables on first start. The backend runs on `http://localhost:
 | `GEMINI_API_KEY` | Voice; empty turns voice off (the endpoints answer 503) |
 | `HANDOVER_AUTO_CLOSE`, `HANDOVER_INACTIVITY_TIMEOUT` | Auto-close live chats after customer inactivity (off by default: only the agent closes a chat) |
 | `HANDOVER_WAITING_REMINDER` | While no agent has accepted, remind the customer this often (default `60s`, `0` = off) |
-| `AGENT_INBOX` | Where agents work: `console` (default, our `/agent` page) or `botpress-desk` |
+| `AGENT_INBOX` | Where agents work: `botpress-desk` (default) or `console` (our old `/agent` page, switched off) |
 | `PUBLIC_BASE_URL` | How agents reach this backend (default `http://localhost:8080`); Desk mode posts file links to it |
 | `ATTACHMENT_RETENTION_DAYS` | Uploaded files are deleted after this many days (default 30) |
 | `CLAMAV_ENABLED`, `CLAMAV_HOST`, `CLAMAV_PORT` | ClamAV virus scan (off until installed) |
-| `AGENT_USERNAME`, `AGENT_PASSWORD` | Agent console login; an empty password is generated and printed in the log |
+| `AGENT_USERNAME`, `AGENT_PASSWORD` | Agent login for the secure file page (and the console, if switched on); an empty password is generated and printed in the log |
 
 Real environment variables override `.env`. Never commit `.env` or API keys.
 
@@ -96,9 +96,11 @@ Open `http://localhost:3000/` for the demo page with the floating chat button, o
 
 Optional `widget/.env.local` (see [widget/.env.example](widget/.env.example)): `NEXT_PUBLIC_API_BASE` and `NEXT_PUBLIC_AI_RATING_DELAY_SECONDS`.
 
-### 3. Agent console
+### 3. Live agents (Botpress Desk)
 
-Open `http://localhost:8080/agent` and sign in with `AGENT_USERNAME` / `AGENT_PASSWORD`. The agent's login username is the name the customer sees.
+Agents work in Botpress Desk (`desk.botpress.cloud`). When a customer asks for an agent, the chat appears there; the agent joins, replies and closes it in Desk, and the customer sees it in the widget. When a customer sends a file, Desk shows a link to `http://localhost:8080/agent/file.html?...`; the agent opens it with `AGENT_USERNAME` / `AGENT_PASSWORD`. Details: [docs/agent-inbox-switch.md](docs/agent-inbox-switch.md).
+
+The old built-in console (`/agent`) is switched off. Set `AGENT_INBOX=console` and restart to use it again; the customer then sees the agent's login username.
 
 ## Useful URLs
 
@@ -106,7 +108,7 @@ Open `http://localhost:8080/agent` and sign in with `AGENT_USERNAME` / `AGENT_PA
 |---|---|
 | `http://localhost:8080/swagger-ui.html` | API docs (Swagger UI) |
 | `http://localhost:8080/actuator/health` | Health check |
-| `http://localhost:8080/agent` | Built-in agent console |
+| `http://localhost:8080/agent/file.html` | Secure file page (Desk links to it) |
 | `http://localhost:3000/` | Widget demo page |
 
 ## API overview
@@ -122,7 +124,8 @@ Open `http://localhost:8080/agent` and sign in with `AGENT_USERNAME` / `AGENT_PA
 | `POST /api/v1/chat/sessions/{sessionId}/attachments` | Upload a file during a live agent chat |
 | `POST /api/v1/chat/speech/transcriptions` | Speech-to-text (multipart audio) |
 | `POST /api/v1/chat/sessions/{sessionId}/replies/{replyId}/speech` | Read a bot reply aloud (WAV) |
-| `/api/v1/agent/handovers/...` | Agent console API (queue, accept, messages, typing, files, close) |
+| `/api/v1/agent/handovers/{id}/attachments/{fileId}` | Agent file view and delete (secure file page) |
+| `/api/v1/agent/handovers/...` | Console API (queue, accept, messages, typing, close); only with `AGENT_INBOX=console` |
 
 Full details are in Swagger UI.
 
@@ -142,7 +145,7 @@ npm run typecheck
 - [docs/technology.md](docs/technology.md): stack, architecture, backend structure
 - [docs/flow.md](docs/flow.md): chat, voice, handover, rating flows
 - [docs/botpress-integration.md](docs/botpress-integration.md): how the backend calls Botpress
-- [docs/botpress-desk.md](docs/botpress-desk.md): Botpress Desk evaluation (why we keep our own agent console)
+- [docs/botpress-desk.md](docs/botpress-desk.md): Botpress Desk evaluation and the decision to use it
 - [docs/agent-inbox-switch.md](docs/agent-inbox-switch.md): switching between our console and Botpress Desk, including how customer files stay private in Desk mode
 - [docs/handover.md](docs/handover.md): live agent handover, real-time updates, waiting messages
 - [docs/rating.md](docs/rating.md): post-chat rating

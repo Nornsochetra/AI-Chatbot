@@ -26,6 +26,8 @@ export interface ChatMessage {
   senderName?: string;
   /** user message: a file the customer sent to the agent */
   attachment?: SentAttachment;
+  /** user message sent by voice: the recording; `text` is its transcript (empty while transcribing) */
+  voice?: VoiceClip;
   /** system message: handover event, shown in the UI language */
   systemCode?: SystemCode;
   /** rating card: what is rated and how far the customer got */
@@ -42,6 +44,17 @@ export interface SentAttachment {
   previewUrl?: string;
   /** the agent removed it */
   removed?: boolean;
+}
+
+export interface VoiceClip {
+  /** local recording, only valid while the page is open (the audio is never uploaded for keeping) */
+  url?: string;
+  /** length measured while recording */
+  seconds: number;
+  /** waveform bar heights, 0..1 */
+  peaks: number[];
+  /** the transcript is still being made */
+  transcribing?: boolean;
 }
 
 /** bot: the AI answers · waiting: in the agent queue · agent: a live agent is chatting */
@@ -75,6 +88,9 @@ export type ChatAction =
   | { type: 'request_error'; kind: ChatErrorKind; failed: FailedAction }
   | { type: 'updates_received'; updates: SessionUpdates }
   | { type: 'attachment_sent'; id: string; response: AttachmentResponse; previewUrl?: string }
+  | { type: 'voice_recorded'; id: string; voice: VoiceClip }
+  | { type: 'voice_transcribed'; id: string; text: string }
+  | { type: 'voice_failed'; id: string }
   | { type: 'ai_rating_prompt'; id: string }
   | { type: 'rating_status'; id: string; status: RatingStatus }
   | { type: 'new_chat' };
@@ -207,6 +223,24 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return { ...state, messages: [...state.messages, message] };
     }
 
+    case 'voice_recorded':
+      return {
+        ...state,
+        messages: [...state.messages, { id: action.id, role: 'user', text: '', voice: { ...action.voice, transcribing: true } }],
+      };
+
+    case 'voice_transcribed':
+      return {
+        ...state,
+        messages: state.messages.map((m) =>
+          m.id === action.id && m.voice ? { ...m, text: action.text, voice: { ...m.voice, transcribing: false } } : m,
+        ),
+      };
+
+    case 'voice_failed':
+      // nothing was understood: the bubble goes away and the composer says why
+      return { ...state, messages: state.messages.filter((m) => m.id !== action.id) };
+
     case 'ai_rating_prompt':
       if (!shouldOfferAiRating(state)) return state;
       return { ...state, messages: [...state.messages, ratingCard(action.id, 'AI')], ratingAsked: true };
@@ -229,12 +263,17 @@ export function loadState(key: string): ChatState {
     if (!raw) return initialState;
     const saved = JSON.parse(raw) as Partial<ChatState>;
     // never restore a half-finished request
-    const messages = (saved.messages ?? []).map((m) => {
-      if (m.role === 'rating' && m.ratingStatus === 'sending') return { ...m, ratingStatus: 'open' as const };
-      // a preview is a page-local object URL: it is gone after a reload
-      if (m.attachment?.previewUrl) return { ...m, attachment: { ...m.attachment, previewUrl: undefined } };
-      return m;
-    });
+    const messages = (saved.messages ?? [])
+      // a voice message that was still being transcribed was never sent
+      .filter((m) => !m.voice?.transcribing)
+      .map((m) => {
+        if (m.role === 'rating' && m.ratingStatus === 'sending') return { ...m, ratingStatus: 'open' as const };
+        // a preview is a page-local object URL: it is gone after a reload
+        if (m.attachment?.previewUrl) return { ...m, attachment: { ...m.attachment, previewUrl: undefined } };
+        // so is a recording: the transcript and waveform stay, playback does not
+        if (m.voice?.url) return { ...m, voice: { ...m.voice, url: undefined } };
+        return m;
+      });
     return {
       ...initialState,
       sessionId: saved.sessionId,

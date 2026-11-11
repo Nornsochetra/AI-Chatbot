@@ -10,9 +10,12 @@ import org.springframework.stereotype.Component;
 import com.kbprasac.chatbot.shared.entity.ChatEvent;
 import com.kbprasac.chatbot.shared.entity.Handover;
 
-/** The R&D agent console (/agent) reads handovers straight from our database, so there is nothing to forward. */
+/**
+ * The R&D agent console (/agent) reads handovers straight from our database, so there is nothing to forward.
+ * Kept but switched off: only loaded with app.handover.inbox=console (Botpress Desk is the default).
+ */
 @Component
-@ConditionalOnProperty(name = "app.handover.inbox", havingValue = "console", matchIfMissing = true)
+@ConditionalOnProperty(name = "app.handover.inbox", havingValue = "console")
 public class BuiltInHelpdesk implements HelpdeskPort {
 
     private static final Logger log = LoggerFactory.getLogger(BuiltInHelpdesk.class);

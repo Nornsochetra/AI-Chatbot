@@ -1,7 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { ChatResponse, SessionUpdates } from '../api/chatApi';
-import { chatReducer, currentAgentName, initialState, shouldOfferAiRating, type ChatState } from './chatReducer';
+import {
+  chatReducer,
+  currentAgentName,
+  initialState,
+  loadState,
+  saveState,
+  shouldOfferAiRating,
+  type ChatState,
+} from './chatReducer';
 
 const response = (overrides: Partial<ChatResponse> = {}): ChatResponse => ({
   sessionId: 's1',
@@ -99,6 +107,48 @@ describe('chatReducer: AI rating', () => {
     expect(sending.messages[2].ratingStatus).toBe('sending');
     expect(chatReducer(sending, { type: 'rating_status', id: 'r1', status: 'sent' }).messages[2].ratingStatus).toBe('sent');
     expect(chatReducer(asked, { type: 'rating_status', id: 'r1', status: 'dismissed' }).messages[2].ratingStatus).toBe('dismissed');
+  });
+});
+
+describe('chatReducer: voice messages', () => {
+  const voice = { url: 'blob:v', seconds: 4.2, peaks: [0.2, 1, 0.5] };
+  const recorded = () => chatReducer(initialState, { type: 'voice_recorded', id: 'v1', voice });
+
+  it('shows the voice bubble at once, transcript still pending', () => {
+    expect(recorded().messages[0]).toMatchObject({ role: 'user', text: '', voice: { ...voice, transcribing: true } });
+  });
+
+  it('fills in the transcript, then sends it through the same bubble', () => {
+    const transcribed = chatReducer(recorded(), { type: 'voice_transcribed', id: 'v1', text: 'branch hours?' });
+    expect(transcribed.messages[0]).toMatchObject({ text: 'branch hours?', voice: { transcribing: false } });
+
+    const sending = chatReducer(transcribed, { type: 'send_start', id: 'v1', text: 'branch hours?', retry: true });
+    const s = chatReducer(sending, { type: 'send_success', userMessageId: 'v1', botMessageId: 'b1', response: response() });
+    expect(s.messages).toHaveLength(2);
+    expect(s.messages[0]).toMatchObject({ role: 'user', voice: { url: 'blob:v' } });
+    expect(s.messages[1]).toMatchObject({ role: 'bot', text: 'Hello' });
+  });
+
+  it('removes the bubble when nothing was understood', () => {
+    expect(chatReducer(recorded(), { type: 'voice_failed', id: 'v1' }).messages).toHaveLength(0);
+  });
+
+  it('keeps transcript and waveform after a reload, but not the recording or an unsent one', () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal('sessionStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => store.set(k, v) });
+    try {
+      const done = chatReducer(chatReducer(recorded(), { type: 'voice_transcribed', id: 'v1', text: 'hi' }), {
+        type: 'voice_recorded',
+        id: 'v2',
+        voice,
+      });
+      saveState('k', done);
+      const restored = loadState('k');
+      expect(restored.messages).toHaveLength(1);
+      expect(restored.messages[0]).toMatchObject({ text: 'hi', voice: { url: undefined, seconds: 4.2, peaks: voice.peaks } });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
