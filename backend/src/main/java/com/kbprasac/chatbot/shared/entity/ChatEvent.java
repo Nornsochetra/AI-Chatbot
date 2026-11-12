@@ -51,4 +51,8 @@ public class ChatEvent {
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
+
+    /** the file this turn was about (sent to the AI chat); its masked text is part of userText */
+    @Column(name = "attachment_id")
+    private UUID attachmentId;
 }

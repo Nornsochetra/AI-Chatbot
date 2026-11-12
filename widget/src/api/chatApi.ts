@@ -6,12 +6,18 @@ export type HandoverReason = 'USER_REQUEST' | 'BOT_SUGGESTED';
 export type SystemCode =
   | 'WAITING'
   | 'WAITING_REMINDER'
-  | 'AGENT_JOINED' | 'AGENT_LEFT' | 'ATTACHMENT_REMOVED' | 'INACTIVITY_CLOSED';
+  | 'AGENT_JOINED' | 'AGENT_LEFT' | 'ATTACHMENT_REMOVED' | 'INACTIVITY_CLOSED'
+  | 'CUSTOMER_ENDED' | 'REQUEST_CANCELLED'
+  /** widget only: the goodbye line after a live chat ends (BRD message customization) */
+  | 'GOODBYE';
 
 export interface ChatRequest {
   sessionId?: string;
   channel: Channel;
+  /** may be empty when a file is sent */
   text: string;
+  /** a file sent to the AI chat first (sendFile); the bot gets its masked text, never the file */
+  attachmentId?: string;
 }
 
 export interface ChatResponse {
@@ -24,6 +30,8 @@ export interface ChatResponse {
   handoverSuggested: boolean;
   inputMasked: boolean;
   createdAt: string;
+  /** WAITING when this message opened a live agent request by itself (BRD auto-route) */
+  handoverStatus?: HandoverStatus | null;
 }
 
 export interface HandoverRequest {
@@ -72,6 +80,20 @@ export interface AttachmentResponse {
   createdAt: string;
 }
 
+/** what came of reading the text in a file sent to the AI chat (SKIPPED: reading is switched off) */
+export type ReadStatus = 'READ' | 'NO_TEXT' | 'FAILED' | 'SKIPPED';
+
+export interface FileUploadResponse {
+  sessionId: string;
+  attachment: AttachmentResponse;
+  /** true: AI chat, the customer still presses Send; false: a live chat is open and the file went to the agent */
+  draft: boolean;
+  readStatus: ReadStatus | null;
+  /** AI chat: the masked text the bot will read, shown to the customer before sending */
+  text: string | null;
+  textMasked: boolean;
+}
+
 /** pushed when the other side is typing; hide it after a few seconds without a new one */
 export interface TypingEvent {
   who: 'AGENT' | 'CUSTOMER';
@@ -106,8 +128,9 @@ export interface RatingResponse {
 /**
  * conflict: the request is valid but not allowed now (e.g. already rated)
  * unavailable: an external service is off or down (e.g. voice without a Gemini key)
+ * limit: a per-chat limit was reached (files sent to the AI chat)
  */
-export type ChatErrorKind = 'validation' | 'conflict' | 'unavailable' | 'timeout' | 'network' | 'server';
+export type ChatErrorKind = 'validation' | 'conflict' | 'unavailable' | 'limit' | 'timeout' | 'network' | 'server';
 
 export class ChatApiError extends Error {
   constructor(public readonly kind: ChatErrorKind, message: string) {
@@ -141,6 +164,9 @@ async function call(url: string, init: RequestInit, timeoutMs: number): Promise<
   }
   if (response.status === 409) {
     throw new ChatApiError('conflict', 'Not allowed in the current state');
+  }
+  if (response.status === 429) {
+    throw new ChatApiError('limit', 'Limit reached');
   }
   if (response.status === 503) {
     throw new ChatApiError('unavailable', 'Service temporarily unavailable');
@@ -178,18 +204,39 @@ export function requestHandover(apiBase: string, body: HandoverRequest, timeoutM
   return request(`${apiBase}/api/v1/chat/handover`, { method: 'POST', body: JSON.stringify(body) }, timeoutMs);
 }
 
+/** The customer ends the live chat, or cancels the request while waiting; the bot answers again. */
+export async function endHandover(apiBase: string, sessionId: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<void> {
+  const url = `${apiBase}/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/handover/close`;
+  await call(url, { method: 'POST' }, timeoutMs);
+}
+
 export function submitRating(apiBase: string, sessionId: string, body: RatingRequest, timeoutMs = REQUEST_TIMEOUT_MS): Promise<RatingResponse> {
   const url = `${apiBase}/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/rating`;
   return request(url, { method: 'POST', body: JSON.stringify(body) }, timeoutMs);
 }
 
-/** Upload a file during a live agent chat (409 = no agent yet, 400 = wrong type / too big / virus). */
-export async function uploadAttachment(apiBase: string, sessionId: string, file: File, timeoutMs = VOICE_TIMEOUT_MS): Promise<AttachmentResponse> {
+/**
+ * A file from the 📎, in any mode (docs/attachments-ai-chat.md). AI chat: returns a draft with the text the bot
+ * will read (nothing reaches the bot until the next message); live agent chat: the file goes to the agent.
+ * 400 = wrong type / too big / virus, 429 = per-chat limit.
+ */
+export async function sendFile(
+  apiBase: string,
+  body: { sessionId?: string; channel: Channel; file: File },
+  timeoutMs = VOICE_TIMEOUT_MS,
+): Promise<FileUploadResponse> {
   const form = new FormData();
-  form.append('file', file, file.name);
-  const url = `${apiBase}/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/attachments`;
-  const response = await call(url, { method: 'POST', body: form }, timeoutMs);
-  return (await response.json()) as AttachmentResponse;
+  form.append('file', body.file, body.file.name);
+  form.append('channel', body.channel);
+  if (body.sessionId) form.append('sessionId', body.sessionId);
+  const response = await call(`${apiBase}/api/v1/chat/attachments`, { method: 'POST', body: form }, timeoutMs);
+  return (await response.json()) as FileUploadResponse;
+}
+
+/** Removes an AI chat file the customer has not sent (the backend also erases unsent files after an hour). */
+export async function discardFile(apiBase: string, sessionId: string, attachmentId: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<void> {
+  const url = `${apiBase}/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}`;
+  await call(url, { method: 'DELETE' }, timeoutMs);
 }
 
 /** Real-time stream (Server-Sent Events): "update" events (SessionUpdates) and "typing" events (TypingEvent). */

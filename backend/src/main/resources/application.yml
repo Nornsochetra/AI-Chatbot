@@ -39,6 +39,11 @@ app:
   chat:
     session-ttl: 30m
     max-message-length: 2000
+    # BRD auto-route: an urgent message (fraud, lost or stolen card, hacked), asking for a person in words, or two
+    # failed bot answers in a row open a live agent request without the customer pressing the button
+    auto-route: ${AUTO_ROUTE:true}
+    # chat history (bot turns and live chat messages) is deleted after this many days; 0 = kept
+    history-retention-days: ${CHAT_RETENTION_DAYS:90}
   handover:
     # Off: only the agent closes a live chat. The requirements ask for an automatic close after
     # 2 minutes without a customer message; set HANDOVER_AUTO_CLOSE=true to switch it on.
@@ -46,12 +51,35 @@ app:
     inactivity-timeout: ${HANDOVER_INACTIVITY_TIMEOUT:2m}
     # while no agent has accepted, send the customer a "still waiting" message this often (0 = off)
     waiting-reminder: ${HANDOVER_WAITING_REMINDER:60s}
-    # where agents work: botpress-desk (default) or console (our /agent page, kept but switched off;
-    # see docs/agent-inbox-switch.md)
+    # where agents work: Botpress Desk (docs/agent-inbox-switch.md)
     inbox: ${AGENT_INBOX:botpress-desk}
+    # Assignment rules (docs/handover.md): each chat has one agent, and one agent has at most this many live chats
+    # at the same time (0 = no limit). A second agent, or an agent at the limit, is not connected.
+    max-chats-per-agent: ${AGENT_MAX_CHATS:2}
+    # Botpress Desk: an agent joining a chat the customer did not escalate takes it over. Off: only customers who
+    # asked for an agent (and have not cancelled or ended) are connected.
+    agent-takeover: ${AGENT_TAKEOVER:false}
   attachment:
     # customer uploads (JPG / PNG / PDF, max 5 MB) are deleted automatically after this many days
     retention-days: ${ATTACHMENT_RETENTION_DAYS:30}
+    # files a customer can send while chatting with the AI, per chat (docs/attachments-ai-chat.md)
+    max-files-per-chat: ${ATTACHMENT_MAX_PER_SESSION:5}
+    ocr:
+      # Reads the text in files sent to the AI chat, on this server (Tesseract). Off until Tesseract is installed:
+      # files can still be sent, the bot is told it could not read them and offers an agent.
+      enabled: ${OCR_ENABLED:false}
+      # embedded: Tesseract bundled as a Java library (Windows x64, nothing to install; put the language files in
+      # tessdata-dir). program: run an installed tesseract program (tesseract-path), e.g. on a Linux server.
+      engine: ${OCR_ENGINE:embedded}
+      tesseract-path: ${OCR_TESSERACT_PATH:tesseract}
+      # eng.traineddata + khm.traineddata; empty = backend/tessdata (embedded) or Tesseract's own (program)
+      tessdata-dir: ${OCR_TESSDATA_DIR:}
+      languages: ${OCR_LANGUAGES:khm+eng}
+      timeout: ${OCR_TIMEOUT:10s}
+      # lines Tesseract is less sure about (0-100) are dropped: what it "reads" in icons, charts and photos
+      min-confidence: ${OCR_MIN_CONFIDENCE:60}
+      max-pdf-pages: 3
+      max-chars: 1500
     virus-scan:
       # ClamAV (clamd). Off until ClamAV is installed; the requirements require it before going live.
       enabled: ${CLAMAV_ENABLED:false}
@@ -61,7 +89,7 @@ app:
   # how agents reach this backend; used for the file links posted to Botpress Desk
   public-base-url: ${PUBLIC_BASE_URL:http://localhost:8080}
   agent:
-    # R&D: one account for the built-in agent console (/agent). If no password is set, one is generated and logged.
+    # R&D: one agent account for the secure file page. If no password is set, one is generated and logged.
     username: ${AGENT_USERNAME:agent}
     password: ${AGENT_PASSWORD:}
 

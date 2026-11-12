@@ -3,8 +3,12 @@ package com.kbprasac.chatbot.shared.entity;
 import java.time.Instant;
 import java.util.UUID;
 
+import com.kbprasac.chatbot.shared.enums.ReadStatus;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
@@ -13,7 +17,10 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/** A file a customer uploaded in a live agent chat. Metadata only; the bytes are in {@link AttachmentData}. */
+/**
+ * A file a customer uploaded, in a live agent chat or while chatting with the AI. Metadata only; the bytes are
+ * in {@link AttachmentData}.
+ */
 @Entity
 @Table(name = "attachment")
 @Getter
@@ -26,7 +33,8 @@ public class Attachment {
     @Id
     private UUID id;
 
-    @Column(name = "handover_id", nullable = false)
+    /** null while the file only went to the AI chat; set when the chat goes to an agent */
+    @Column(name = "handover_id")
     private UUID handoverId;
 
     @Column(name = "session_id", nullable = false)
@@ -52,11 +60,37 @@ public class Attachment {
     @Column(name = "deleted_by")
     private String deletedBy;
 
-    /** AGENT or RETENTION */
+    /** AGENT, RETENTION, CUSTOMER (draft removed) or UNSENT (draft never sent) */
     @Column(name = "delete_reason")
     private String deleteReason;
 
+    /** when it went into the conversation; null = a draft in the AI chat the customer has not sent yet */
+    @Column(name = "sent_at")
+    private Instant sentAt;
+
+    /** set for files sent to the AI chat; null for live agent chat files (never read) */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "read_status")
+    private ReadStatus readStatus;
+
+    /** the text the bot gets, already masked; the raw text is never stored */
+    @Column(name = "read_text")
+    private String readText;
+
+    /** masking changed the read text */
+    @Column(name = "read_masked", nullable = false)
+    private boolean readMasked;
+
     public boolean isDeleted() {
         return deletedAt != null;
+    }
+
+    public boolean isImage() {
+        return contentType.startsWith("image/");
+    }
+
+    /** a file sent while chatting with the AI (not in a live agent chat) */
+    public boolean isForBot() {
+        return readStatus != null;
     }
 }

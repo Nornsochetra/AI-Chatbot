@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 
 import com.kbprasac.chatbot.shared.entity.ChatEvent;
 import com.kbprasac.chatbot.shared.entity.Handover;
+import com.kbprasac.chatbot.shared.entity.HandoverMessage;
 
 /**
  * The R&D agent console (/agent) reads handovers straight from our database, so there is nothing to forward.
@@ -27,7 +28,7 @@ public class BuiltInHelpdesk implements HelpdeskPort {
     }
 
     @Override
-    public void customerMessage(Handover handover, String maskedText) {
+    public void customerMessage(Handover handover, HandoverMessage message) {
         // the console polls the handover messages
     }
 

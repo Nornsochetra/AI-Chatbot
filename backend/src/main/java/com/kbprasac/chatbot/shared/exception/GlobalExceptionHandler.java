@@ -52,6 +52,11 @@ public class GlobalExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
     }
 
+    @ExceptionHandler(TooManyRequestsException.class)
+    public ProblemDetail handleTooMany(TooManyRequestsException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage());
+    }
+
     @ExceptionHandler(ServiceUnavailableException.class)
     public ProblemDetail handleUnavailable(ServiceUnavailableException ex) {
         // details (e.g. the external service's error) go to the log only, not to the customer

@@ -26,6 +26,7 @@ import com.kbprasac.chatbot.shared.enums.MessageSender;
 import com.kbprasac.chatbot.shared.enums.SystemMessageCode;
 import com.kbprasac.chatbot.shared.exception.ConflictException;
 import com.kbprasac.chatbot.shared.exception.NotFoundException;
+import com.kbprasac.chatbot.shared.repository.AttachmentRepository;
 import com.kbprasac.chatbot.shared.repository.ChatEventRepository;
 import com.kbprasac.chatbot.shared.repository.HandoverMessageRepository;
 import com.kbprasac.chatbot.shared.repository.HandoverRepository;
@@ -44,16 +45,18 @@ public class HandoverService {
     private final HandoverRepository handoverRepository;
     private final HandoverMessageRepository messageRepository;
     private final ChatEventRepository chatEventRepository;
+    private final AttachmentRepository attachmentRepository;
     private final HelpdeskPort helpdesk;
     private final HandoverProperties props;
     private final ApplicationEventPublisher events;
 
     public HandoverService(HandoverRepository handoverRepository, HandoverMessageRepository messageRepository,
-                           ChatEventRepository chatEventRepository, HelpdeskPort helpdesk, HandoverProperties props,
-                           ApplicationEventPublisher events) {
+                           ChatEventRepository chatEventRepository, AttachmentRepository attachmentRepository,
+                           HelpdeskPort helpdesk, HandoverProperties props, ApplicationEventPublisher events) {
         this.handoverRepository = handoverRepository;
         this.messageRepository = messageRepository;
         this.chatEventRepository = chatEventRepository;
+        this.attachmentRepository = attachmentRepository;
         this.helpdesk = helpdesk;
         this.props = props;
         this.events = events;
@@ -74,7 +77,9 @@ public class HandoverService {
                     .lastCustomerActivityAt(now)
                     .build());
             addSystemMessage(handover, SystemMessageCode.WAITING);
+            List<Attachment> earlierFiles = linkFilesSentToBot(handover);
             helpdesk.ticketOpened(handover, transcript(sessionId));
+            helpdesk.filesSentBefore(handover, earlierFiles);
             return handover;
         });
     }
@@ -89,7 +94,7 @@ public class HandoverService {
      * Desk already has the ticket, so the helpdesk is not told.
      */
     @Transactional
-    public Handover startByAgent(String sessionId, Channel channel, String agentName) {
+    public Handover startByAgent(String sessionId, Channel channel, String agentName, String agentKey) {
         return findOpen(sessionId).orElseGet(() -> {
             Instant now = Instant.now();
             Handover handover = handoverRepository.save(Handover.builder()
@@ -99,27 +104,44 @@ public class HandoverService {
                     .status(HandoverStatus.ACTIVE)
                     .reason(HandoverReason.AGENT_INITIATED)
                     .agentName(agentName)
+                    .agentKey(agentKey)
                     .createdAt(now)
                     .acceptedAt(now)
                     .lastCustomerActivityAt(now)
                     .build());
             addSystemMessage(handover, SystemMessageCode.AGENT_JOINED);
+            helpdesk.filesSentBefore(handover, linkFilesSentToBot(handover));
             return handover;
         });
     }
 
+    /**
+     * Files the customer sent to the AI chat before the handover go to the agent: linked to the handover and
+     * added as customer file messages. The agent gets the file; the bot only ever had its masked text.
+     */
+    private List<Attachment> linkFilesSentToBot(Handover handover) {
+        List<Attachment> files = attachmentRepository
+                .findBySessionIdAndHandoverIdIsNullAndSentAtIsNotNullAndDeletedAtIsNullOrderBySentAtAsc(
+                        handover.getSessionId());
+        for (Attachment attachment : files) {
+            attachment.setHandoverId(handover.getId());
+            attachmentRepository.save(attachment);
+            addMessage(handover, MessageSender.CUSTOMER, attachment.getFileName(), attachment);
+        }
+        return files;
+    }
+
     @Transactional
     public void customerMessage(Handover handover, String maskedText) {
-        recordCustomerMessage(handover, maskedText);
-        helpdesk.customerMessage(handover, maskedText);
+        helpdesk.customerMessage(handover, recordCustomerMessage(handover, maskedText));
     }
 
     /** A customer message the agent already received another way (Botpress Desk shows the bot conversation). */
     @Transactional
-    public void recordCustomerMessage(Handover handover, String maskedText) {
+    public HandoverMessage recordCustomerMessage(Handover handover, String maskedText) {
         handover.setLastCustomerActivityAt(Instant.now());
         handoverRepository.save(handover);
-        addMessage(handover, MessageSender.CUSTOMER, maskedText);
+        return addMessage(handover, MessageSender.CUSTOMER, maskedText);
     }
 
     /** The customer uploaded a file; it appears in the chat as a message pointing at the attachment. */
@@ -140,6 +162,12 @@ public class HandoverService {
 
     @Transactional
     public Handover accept(UUID handoverId, String agentName) {
+        return accept(handoverId, agentName, agentName);
+    }
+
+    /** @param agentKey who the agent is (assignment rules); agentName is the name the customer sees */
+    @Transactional
+    public Handover accept(UUID handoverId, String agentName, String agentKey) {
         Handover handover = get(handoverId);
         if (handover.getStatus() != HandoverStatus.WAITING) {
             throw new ConflictException("Handover is " + handover.getStatus() + ", only WAITING can be accepted");
@@ -147,6 +175,7 @@ public class HandoverService {
         Instant now = Instant.now();
         handover.setStatus(HandoverStatus.ACTIVE);
         handover.setAgentName(agentName);
+        handover.setAgentKey(agentKey);
         handover.setAcceptedAt(now);
         // the inactivity timer starts when the agent joins, not when the customer asked
         handover.setLastCustomerActivityAt(now);
@@ -177,14 +206,41 @@ public class HandoverService {
         handover.setCloseReason(reason);
         handover.setClosedAt(Instant.now());
         handoverRepository.save(handover);
-        addSystemMessage(handover, reason == HandoverCloseReason.CUSTOMER_INACTIVE
-                ? SystemMessageCode.INACTIVITY_CLOSED
-                : SystemMessageCode.AGENT_LEFT);
+        addSystemMessage(handover, switch (reason) {
+            case CUSTOMER_INACTIVE -> SystemMessageCode.INACTIVITY_CLOSED;
+            case CUSTOMER_ENDED -> wasWaiting ? SystemMessageCode.REQUEST_CANCELLED : SystemMessageCode.CUSTOMER_ENDED;
+            case AGENT_CLOSED -> SystemMessageCode.AGENT_LEFT;
+        });
         helpdesk.ticketClosed(handover);
         if (wasWaiting) {
             events.publishEvent(new QueueChangedEvent());
         }
         return handover;
+    }
+
+    /** The customer ended the live chat (or cancelled the request) from the widget. Nothing open: nothing to do. */
+    @Transactional
+    public void endByCustomer(String sessionId) {
+        findOpen(sessionId).ifPresent(h -> close(h.getId(), HandoverCloseReason.CUSTOMER_ENDED));
+    }
+
+    /**
+     * Our side closed the chat but the agent inbox still holds it (Botpress Desk keeps the bot silent until the
+     * agent closes the ticket there).
+     */
+    public boolean agentInboxStillOpen(String sessionId) {
+        return helpdesk.stillOpenAfterOurClose(sessionId);
+    }
+
+    /** An agent sits in the chat in the inbox without being connected, which pauses the bot (Botpress Desk). */
+    public boolean botPausedByInbox(String sessionId) {
+        return helpdesk.botPausedByInbox(sessionId);
+    }
+
+    /** Live chats this agent has now (assignment rule). */
+    @Transactional(readOnly = true)
+    public long activeChatsOf(String agentKey) {
+        return handoverRepository.countByStatusAndAgentKey(HandoverStatus.ACTIVE, agentKey);
     }
 
     /** 1 = next in line. Null when the handover is not waiting (an agent has it, or it is closed). */

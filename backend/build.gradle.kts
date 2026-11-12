@@ -33,6 +33,13 @@ dependencies {
 
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:$springdocVersion")
 
+    // text layer of PDFs sent to the AI chat, and rendering scanned pages for OCR (docs/attachments-ai-chat.md)
+    implementation("org.apache.pdfbox:pdfbox:3.0.4")
+    // OCR without installing anything: Tesseract bundled for Windows x64, called through JNA
+    implementation("net.sourceforge.tess4j:tess4j:5.13.0") {
+        exclude(group = "org.apache.pdfbox", module = "pdfbox-tools") // PDF debugger UI, not used
+    }
+
     compileOnly("org.projectlombok:lombok")
     annotationProcessor("org.projectlombok:lombok")
 

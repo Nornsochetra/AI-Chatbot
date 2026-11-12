@@ -38,6 +38,7 @@ import com.kbprasac.chatbot.shared.exception.ConflictException;
 import com.kbprasac.chatbot.shared.repository.ChatEventRepository;
 import com.kbprasac.chatbot.shared.repository.HandoverMessageRepository;
 import com.kbprasac.chatbot.shared.repository.HandoverRepository;
+import com.kbprasac.chatbot.shared.repository.AttachmentRepository;
 
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -49,6 +50,8 @@ class HandoverServiceTest {
     private HandoverMessageRepository messageRepository;
     @Mock
     private ChatEventRepository chatEventRepository;
+    @Mock
+    private AttachmentRepository attachmentRepository;
     @Mock
     private HelpdeskPort helpdesk;
     @Mock
@@ -69,8 +72,9 @@ class HandoverServiceTest {
     }
 
     private HandoverService serviceWith(boolean autoClose, Duration waitingReminder) {
-        return new HandoverService(handoverRepository, messageRepository, chatEventRepository, helpdesk,
-                new HandoverProperties(autoClose, Duration.ofMinutes(2), waitingReminder, null), events);
+        return new HandoverService(handoverRepository, messageRepository, chatEventRepository, attachmentRepository,
+                helpdesk,
+                new HandoverProperties(autoClose, Duration.ofMinutes(2), waitingReminder, null, 2, false), events);
     }
 
     private Handover waitingSince(Duration ago, Instant lastReminder) {
@@ -106,6 +110,46 @@ class HandoverServiceTest {
         assertEquals(MessageSender.SYSTEM, system.getSender());
         assertEquals("WAITING", system.getText());
         verify(helpdesk).ticketOpened(eq(h), any());
+    }
+
+    @Test
+    void startGivesTheAgentTheFilesSentToTheAssistant() {
+        when(handoverRepository.findFirstBySessionIdAndStatusInOrderByCreatedAtDesc(eq("s1"), any()))
+                .thenReturn(Optional.empty());
+        com.kbprasac.chatbot.shared.entity.Attachment file = com.kbprasac.chatbot.shared.entity.Attachment.builder()
+                .id(java.util.UUID.randomUUID()).sessionId("s1").fileName("error.png").contentType("image/png")
+                .readStatus(com.kbprasac.chatbot.shared.enums.ReadStatus.READ).sentAt(Instant.now()).build();
+        when(attachmentRepository.findBySessionIdAndHandoverIdIsNullAndSentAtIsNotNullAndDeletedAtIsNullOrderBySentAtAsc("s1"))
+                .thenReturn(List.of(file));
+
+        Handover h = service.start("s1", Channel.WEBSITE, HandoverReason.USER_REQUEST);
+
+        assertEquals(h.getId(), file.getHandoverId(), "the agent may now open it");
+        verify(attachmentRepository).save(file);
+        HandoverMessage fileMessage = savedMessages().get(1);
+        assertEquals(MessageSender.CUSTOMER, fileMessage.getSender());
+        assertSame(file, fileMessage.getAttachment());
+        // Desk gets it in the block posted when the agent joins, not one by one while the bot still answers
+        verify(helpdesk, never()).customerAttachment(any(), any());
+        // the agent gets their links with the request, before joining
+        verify(helpdesk).filesSentBefore(h, List.of(file));
+    }
+
+    @Test
+    void acceptRemembersWhoTheAgentIs() {
+        Handover waiting = handover(HandoverStatus.WAITING, Instant.now());
+        when(handoverRepository.findById(waiting.getId())).thenReturn(Optional.of(waiting));
+
+        Handover accepted = service.accept(waiting.getId(), "Sokha", "sokha chan");
+
+        assertEquals("Sokha", accepted.getAgentName(), "shown to the customer");
+        assertEquals("sokha chan", accepted.getAgentKey(), "used by the assignment rules");
+    }
+
+    @Test
+    void activeChatsAreCountedPerAgent() {
+        when(handoverRepository.countByStatusAndAgentKey(HandoverStatus.ACTIVE, "sokha chan")).thenReturn(2L);
+        assertEquals(2, service.activeChatsOf("sokha chan"));
     }
 
     @Test
@@ -198,6 +242,42 @@ class HandoverServiceTest {
         assertEquals(HandoverStatus.CLOSED, h.getStatus());
         assertEquals(List.of("AGENT_LEFT"), savedMessages().stream().map(HandoverMessage::getText).toList());
         verify(helpdesk).ticketClosed(h);
+    }
+
+    @Test
+    void customerEndingAnAgentChatClosesItAndTellsTheInbox() {
+        Handover h = handover(HandoverStatus.ACTIVE, Instant.now());
+        when(handoverRepository.findFirstBySessionIdAndStatusInOrderByCreatedAtDesc(eq("s1"), any()))
+                .thenReturn(Optional.of(h));
+
+        service.endByCustomer("s1");
+
+        assertEquals(HandoverStatus.CLOSED, h.getStatus());
+        assertEquals(HandoverCloseReason.CUSTOMER_ENDED, h.getCloseReason());
+        assertEquals(List.of("CUSTOMER_ENDED"), savedMessages().stream().map(HandoverMessage::getText).toList());
+        verify(helpdesk).ticketClosed(h);
+    }
+
+    @Test
+    void customerCancellingWhileWaitingIsReportedAsACancelledRequest() {
+        Handover h = handover(HandoverStatus.WAITING, Instant.now());
+        when(handoverRepository.findFirstBySessionIdAndStatusInOrderByCreatedAtDesc(eq("s1"), any()))
+                .thenReturn(Optional.of(h));
+
+        service.endByCustomer("s1");
+
+        assertEquals(HandoverStatus.CLOSED, h.getStatus());
+        assertEquals(List.of("REQUEST_CANCELLED"), savedMessages().stream().map(HandoverMessage::getText).toList());
+    }
+
+    @Test
+    void customerEndingWithNothingOpenDoesNothing() {
+        when(handoverRepository.findFirstBySessionIdAndStatusInOrderByCreatedAtDesc(eq("s1"), any()))
+                .thenReturn(Optional.empty());
+
+        service.endByCustomer("s1");
+
+        verify(helpdesk, org.mockito.Mockito.never()).ticketClosed(any());
     }
 
     @Test
@@ -310,7 +390,7 @@ class HandoverServiceTest {
         when(handoverRepository.findFirstBySessionIdAndStatusInOrderByCreatedAtDesc(eq("s1"), any()))
                 .thenReturn(Optional.empty());
 
-        Handover h = service.startByAgent("s1", Channel.WEBSITE, "Sokha");
+        Handover h = service.startByAgent("s1", Channel.WEBSITE, "Sokha", "sokha chan");
 
         assertEquals(HandoverStatus.ACTIVE, h.getStatus());
         assertEquals(HandoverReason.AGENT_INITIATED, h.getReason());

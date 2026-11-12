@@ -58,6 +58,13 @@ public class CustomerHandoverController {
         return mapper.toResponse(handover, handoverService.queuePosition(handover));
     }
 
+    @PostMapping("/sessions/{sessionId}/handover/close")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Operation(summary = "The customer ends the live chat, or cancels the request while waiting; the bot answers again")
+    public void endHandover(@PathVariable String sessionId) {
+        handoverService.endByCustomer(sessionId);
+    }
+
     @GetMapping(path = "/sessions/{sessionId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @Operation(summary = "Real-time stream (SSE): 'update' (agent messages / events, same as /updates) and 'typing'")
     public SseEmitter events(@PathVariable String sessionId,

@@ -3,6 +3,7 @@ package com.kbprasac.chatbot.chat.payload.response;
 import java.time.Instant;
 import java.util.UUID;
 
+import com.kbprasac.chatbot.shared.enums.HandoverStatus;
 import com.kbprasac.chatbot.shared.enums.SessionState;
 
 public record ChatMessageResponse(
@@ -14,5 +15,7 @@ public record ChatMessageResponse(
         SessionState state,
         boolean handoverSuggested,
         boolean inputMasked,
-        Instant createdAt) {
+        Instant createdAt,
+        /** WAITING when this message opened a live agent request (auto-route); otherwise null */
+        HandoverStatus handoverStatus) {
 }

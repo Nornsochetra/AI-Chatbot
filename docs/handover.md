@@ -6,7 +6,31 @@ Status: R&D, built and verified end to end on 2026-11-10. See [technology.md](te
 
 Requirements section III.G: a customer can reach a live agent from the chatbot (button or prompt), stays in the same chat window, and the bot stays silent while the agent is active. The live chat ends when the agent closes it, and the customer goes back to the bot.
 
+**Update (2026-11-12): the customer can end the chat too.** One header button changes with the state: "Talk to an agent" (AI chat) → "Cancel request" (waiting, no confirmation) → "End chat" (with an agent, after an in-widget confirmation). Backend: `POST /api/v1/chat/sessions/{sessionId}/handover/close`, close reason `CUSTOMER_ENDED`, system code `CUSTOMER_ENDED` (followed by the agent rating card) or `REQUEST_CANCELLED` (no rating card). In Botpress Desk the agent gets a line saying the customer ended the chat or cancelled; see [agent-inbox-switch.md](agent-inbox-switch.md) for the Desk ticket that stays open.
+
 **Decision (2026-11-10): only the agent closes a live chat.** The requirements (section II.B, "Live Agent Conversation Session Timeout & AI Fallback") ask for an automatic close after 2 minutes of customer inactivity. That is built but **off by default**; set `HANDOVER_AUTO_CLOSE=true` to switch it on if the bank confirms the requirements rule.
+
+**Update (2026-11-12): BRD auto-route.** The chat goes to the live agent queue without the button when (`AUTO_ROUTE=true`, default):
+
+| Trigger (BRD wording) | Detected by | Agent sees |
+|---|---|---|
+| "detects urgent support need" | Words for fraud, scams, lost / stolen cards, hacked accounts, unauthorized transactions, missing money (English and Khmer) | `[Live agent requested · URGENT] … routed automatically: the customer's message looks urgent …` |
+| "detects that a human agent is required" | The customer asks for a person in words ("talk to a real person", "live agent", "និយាយជាមួយបុគ្គលិក"). "agent" alone is not enough: it also means a bank agent location | `… routed automatically: the customer asked for a person in their message` |
+| "cannot answer" / "repeated failed attempts" | Two bot turns in a row where the bot gave no answer (our fallback reply) | `… routed automatically: the bot could not answer twice in a row` |
+
+The urgent or asking message never goes to the bot; the agent gets it (secrets masked) when they join. The widget switches to waiting at once (`handoverStatus: WAITING` in the chat response). Limit: "cannot answer" only counts turns where Botpress sent no answer; a polite "I don't have that information" from the bot is an answer to us. Reasons are stored as `AUTO_URGENT`, `AUTO_ASKED_FOR_AGENT`, `AUTO_BOT_FAILED`.
+
+**Update (2026-11-12): assignment rules (Botpress Desk).** Desk lets any agent join any conversation, so the backend decides which agent actions reach the customer. An agent's join or reply is passed on only when:
+
+1. **The customer asked for an agent** and has not cancelled or ended (otherwise an agent could pull a customer back in after a cancel). `AGENT_TAKEOVER=true` brings back agents joining chats nobody asked for.
+2. **No other agent has the chat:** one agent per chat.
+3. **The agent has fewer than `AGENT_MAX_CHATS` live chats** (default 2, `0` = no limit). Chat customers reply slowly, so one agent can usually handle 2–3 at once; the limit is a setting so the call center can tune it.
+
+Otherwise the customer sees nothing and the agent gets one "[Not connected]" note in Desk saying why (nobody asked / Sokha is already helping / you are at the limit). An agent at the limit can reply in the chat once one of their chats ends; the reply then connects them. When an agent joins a chat nobody asked for, Botpress pauses the bot until the ticket is closed; meanwhile the customer gets "The assistant will answer again in a moment" and can still tap "Talk to an agent", which the agent in the chat then picks up.
+
+- **Agents are recognised by their Desk name** (events carry no agent id): the full name, lower-cased (`handover.agent_key`, Flyway V8). Two agents with the same full name count as one; give each a unique name in Desk.
+- The BRD does not fix these rules; it lists "queue assignment, transfer, and closure behavior" as feasibility question 12 for the call center. Desk's own assignment features (claim, auto-assign, per-agent capacity), transfer and supervisors were not checked yet; a supervisor who types in a chat would be refused like any other second agent.
+- The hidden console keeps its old behaviour (no limits).
 
 ## 2. Key decision: the agent side is ours, not Botpress
 
@@ -213,14 +237,15 @@ Before this, the customer only saw a short grey line "Connecting you to a live a
 | When | Customer sees (Khmer / English) |
 |---|---|
 | Right away | A chat bubble (like a bot reply): "Thank you! I'm connecting you to a live agent. An agent will join shortly — you can keep typing, and the agent will see your messages." |
-| While waiting | Banner: "Waiting for an agent… You're number {n} in the queue." The number updates live as earlier customers are taken |
+| While waiting | Banner: "Please wait, an agent will join shortly. You can keep typing; the agent will see your messages." (Until 2026-11-12 it showed "You're number {n} in the queue"; removed: the BRD only asks for a handover state, and the number counted waiting requests, not free agents, so it misled. The API still returns `queuePosition`.) |
 | Every 60 s with no agent | A chat bubble: "Our agents are still busy helping other customers. Thank you for your patience — an agent will be with you soon." |
 | Agent accepts | Reminders stop; "sokha joined the chat." |
 
 How it works:
 
 - `WAITING` and `WAITING_REMINDER` are system codes; the widget shows them as bot-style bubbles (not grey status lines) and never with an agent name.
-- **Queue position** = number of `WAITING` handovers created earlier + 1. Returned by `POST /handover`, `/updates` and the stream; `null` once an agent has the chat.
+- **Queue position** = number of `WAITING` handovers created earlier + 1. Returned by `POST /handover`, `/updates` and the stream; `null` once an agent has the chat. Not shown in the widget any more (see above).
+- **"New chat" cancels an open request or live chat** (2026-11-12). Before, it only cleared the widget, and the request stayed waiting on the server forever, holding a place and counting towards an agent's limit.
 - **Reminder:** `HandoverService.remindWaiting()` runs every 10 s and adds `WAITING_REMINDER` to each `WAITING` handover whose last reminder (or creation) is older than `app.handover.waiting-reminder`. `handover.last_reminder_at` (Flyway `V6`) keeps the time of the last one, so a restart does not repeat it early. With the 10 s check, a reminder can arrive up to 10 s after the interval.
 - The agent console shows the reminder in the chat history as "Customer still waiting — reminder sent".
 - When a customer leaves the queue (an agent accepts, or a waiting chat is closed), `QueueChangedEvent` pushes the new position to every customer still waiting, so the banner number drops right away.

@@ -4,16 +4,18 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 
 import {
   ChatApiError,
+  discardFile,
+  endHandover,
   eventsUrl,
   getChatConfig,
   getUpdates,
   readAloud,
   requestHandover,
+  sendFile,
   sendMessage,
   sendTyping,
   submitRating,
   transcribe,
-  uploadAttachment,
   type ChatErrorKind,
   type HandoverReason,
   type SessionUpdates,
@@ -22,6 +24,7 @@ import {
 import { messagesFor, type Messages } from '../i18n';
 import type { Lang, WidgetConfig } from '../lib/config';
 import { newId } from '../lib/ids';
+import { detectLanguage } from '../lib/language';
 import { waveformPeaks } from '../lib/waveform';
 import {
   chatReducer,
@@ -30,6 +33,8 @@ import {
   saveState,
   shouldOfferAiRating,
   type ChatMessage,
+  type DraftFile,
+  type SentAttachment,
 } from '../state/chatReducer';
 import { ChatHeader } from './ChatHeader';
 import { Composer, MAX_LENGTH } from './Composer';
@@ -61,6 +66,8 @@ function errorText(t: Messages, kind: ChatErrorKind): string {
     case 'conflict':
     case 'unavailable':
       return t.errorServer;
+    case 'limit':
+      return t.attachLimit;
     case 'timeout':
       return t.errorTimeout;
     case 'network':
@@ -264,16 +271,53 @@ export function ChatApp({ config }: { config: WidgetConfig }) {
     return () => urls.forEach((url) => URL.revokeObjectURL(url));
   }, []);
 
-  /** File upload during a live agent chat; errors are shown by the Composer. */
+  // AI chat: the picked file waits above the composer, with the text the bot will read, until the next Send
+  const [draft, setDraft] = useState<DraftFile | null>(null);
+
+  /**
+   * File from the 📎; errors are shown by the Composer. In a live chat it goes to the agent at once. In the AI
+   * chat the backend keeps it as a draft and reads its text (masked); the bot gets nothing until Send.
+   */
   async function attach(file: File) {
-    if (!state.sessionId) return;
-    const response = await uploadAttachment(config.apiBase, state.sessionId, file);
+    const response = await sendFile(config.apiBase, { sessionId: state.sessionId, channel: config.channel, file });
+    if (!state.sessionId) dispatch({ type: 'session_started', sessionId: response.sessionId });
     let previewUrl: string | undefined;
     if (file.type.startsWith('image/')) {
       previewUrl = URL.createObjectURL(file);
       previewUrlsRef.current.push(previewUrl);
     }
-    dispatch({ type: 'attachment_sent', id: newId(), response, previewUrl });
+    if (!response.draft) {
+      dispatch({ type: 'attachment_sent', id: newId(), response: response.attachment, previewUrl });
+      return;
+    }
+    const { id, fileName, contentType, sizeBytes } = response.attachment;
+    setDraft({
+      id,
+      fileName,
+      contentType,
+      sizeBytes,
+      previewUrl,
+      readStatus: response.readStatus,
+      readText: response.text ?? undefined,
+      readMasked: response.textMasked,
+    });
+  }
+
+  /** The customer removed the file before sending it: erased on the backend (best effort; unsent files expire). */
+  function discardDraft() {
+    if (!draft) return;
+    if (state.sessionId) discardFile(config.apiBase, state.sessionId, draft.id).catch(() => undefined);
+    setDraft(null);
+  }
+
+  /** Send pressed: the typed question goes with the draft file, if there is one. */
+  function sendTyped(text: string) {
+    const file = draft;
+    setDraft(null);
+    const attachment: SentAttachment | undefined = file
+      ? { id: file.id, fileName: file.fileName, contentType: file.contentType, sizeBytes: file.sizeBytes, previewUrl: file.previewUrl }
+      : undefined;
+    void send(text, undefined, true, attachment);
   }
 
   // the customer's recordings, played back from their own device; released when the chat closes
@@ -308,14 +352,22 @@ export function ChatApp({ config }: { config: WidgetConfig }) {
     await send(transcript, id, false);
   }
 
-  async function send(text: string, retryId?: string, newBubble = !retryId) {
+  async function send(text: string, retryId?: string, newBubble = !retryId, attachment?: SentAttachment) {
     const id = retryId ?? newId();
-    dispatch({ type: 'send_start', id, text, retry: !newBubble });
+    // BRD: messages follow the detected language (the language button still switches it by hand)
+    const detected = detectLanguage(text);
+    if (detected && detected !== lang) setLang(detected);
+    dispatch({ type: 'send_start', id, text, retry: !newBubble, attachment });
     try {
-      const response = await sendMessage(config.apiBase, { sessionId: state.sessionId, channel: config.channel, text });
+      const response = await sendMessage(config.apiBase, {
+        sessionId: state.sessionId,
+        channel: config.channel,
+        text,
+        attachmentId: attachment?.id,
+      });
       dispatch({ type: 'send_success', userMessageId: id, botMessageId: newId(), response });
     } catch (e) {
-      dispatch({ type: 'request_error', kind: errorKind(e), failed: { type: 'message', text, messageId: id } });
+      dispatch({ type: 'request_error', kind: errorKind(e), failed: { type: 'message', text, messageId: id, attachment } });
     }
   }
 
@@ -329,10 +381,29 @@ export function ChatApp({ config }: { config: WidgetConfig }) {
     }
   }
 
+  // "End chat" with an agent asks first (on the page: the viewer frame has no confirm()); "Cancel request" does not
+  const [confirmingEnd, setConfirmingEnd] = useState(false);
+
+  async function endChat() {
+    setConfirmingEnd(false);
+    if (!state.sessionId) return;
+    const sessionId = state.sessionId;
+    dispatch({ type: 'handover_start' });
+    try {
+      await endHandover(config.apiBase, sessionId);
+      // the live stream also brings this; fetching it here keeps the widget right if the stream is down
+      dispatch({ type: 'updates_received', updates: await getUpdates(config.apiBase, sessionId, cursorRef.current) });
+      dispatch({ type: 'request_done' });
+    } catch (e) {
+      dispatch({ type: 'request_error', kind: errorKind(e), failed: { type: 'end' } });
+    }
+  }
+
   function retry() {
     const failed = state.failed;
-    if (failed?.type === 'message') void send(failed.text, failed.messageId);
+    if (failed?.type === 'message') void send(failed.text, failed.messageId, false, failed.attachment);
     if (failed?.type === 'handover') void talkToAgent(failed.reason);
+    if (failed?.type === 'end') void endChat();
   }
 
   function close() {
@@ -351,17 +422,38 @@ export function ChatApp({ config }: { config: WidgetConfig }) {
         embedded={config.embedded}
         busy={busy}
         onToggleLanguage={() => setLang(lang === 'km' ? 'en' : 'km')}
-        onNewChat={() => dispatch({ type: 'new_chat' })}
+        onNewChat={() => {
+          discardDraft();
+          // a request or live chat left open would stay waiting on the server and hold an agent's place
+          if (state.mode !== 'bot' && state.sessionId) {
+            endHandover(config.apiBase, state.sessionId).catch(() => undefined);
+          }
+          dispatch({ type: 'new_chat' });
+        }}
         onTalkToAgent={() => void talkToAgent('USER_REQUEST')}
+        onEndChat={() => (state.mode === 'agent' ? setConfirmingEnd(true) : void endChat())}
         onClose={close}
       />
-      {state.mode === 'waiting' && (
-        <div className="kb-banner">
-          {state.queuePosition
-            ? t.waitingBannerPosition.replace('{position}', String(state.queuePosition))
-            : t.waitingBanner}
+      {confirmingEnd && state.mode === 'agent' && (
+        <div className="kb-confirm" role="alertdialog" aria-modal="true" aria-labelledby="kb-confirm-title">
+          <div className="kb-confirm__box">
+            <div id="kb-confirm-title" className="kb-confirm__title">
+              {currentAgentName(state) ? t.endChatConfirmNamed.replace('{name}', currentAgentName(state)!) : t.endChatConfirm}
+            </div>
+            <p className="kb-confirm__hint">{t.endChatConfirmHint}</p>
+            <div className="kb-confirm__actions">
+              <button type="button" className="kb-button" onClick={() => setConfirmingEnd(false)} autoFocus>
+                {t.keepChatting}
+              </button>
+              <button type="button" className="kb-button kb-button--danger" onClick={() => void endChat()}>
+                {t.endChatYes}
+              </button>
+            </div>
+          </div>
         </div>
       )}
+      {/* BRD: a handover state only; no queue number (it only counted waiting requests, not free agents) */}
+      {state.mode === 'waiting' && <div className="kb-banner">{t.waitingBanner}</div>}
       <MessageList
         messages={state.messages}
         // plain dots while the bot answers; "<agent> is typing…" while the agent types
@@ -389,11 +481,14 @@ export function ChatApp({ config }: { config: WidgetConfig }) {
       <Composer
         t={t}
         disabled={busy}
-        onSend={(text) => void send(text)}
+        onSend={sendTyped}
         onVoice={sendVoice}
         onTyping={notifyTyping}
-        // files only while a live agent is chatting: the AI must not receive personal data
-        onAttach={state.mode === 'agent' ? attach : undefined}
+        // AI chat: the bot only ever gets the masked text read from a file; a live agent gets the file itself
+        onAttach={attach}
+        readingFiles={state.mode === 'bot'}
+        draft={draft}
+        onDiscardDraft={discardDraft}
       />
     </div>
   );

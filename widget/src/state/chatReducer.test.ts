@@ -181,6 +181,24 @@ describe('chatReducer: attachments', () => {
     expect(s.messages[0].attachment).toMatchObject({ removed: true, previewUrl: undefined });
     expect(s.messages[1]).toMatchObject({ role: 'system', systemCode: 'ATTACHMENT_REMOVED', senderName: 'sokha' });
   });
+
+  it('sends a file to the AI chat as one bubble with the question', () => {
+    const file = { id: 'att-2', fileName: 'error.png', contentType: 'image/png', sizeBytes: 1024, previewUrl: 'blob:y' };
+    const s = chatReducer(initialState, { type: 'send_start', id: 'm1', text: 'what does this mean?', attachment: file });
+    expect(s.messages[0]).toMatchObject({ role: 'user', text: 'what does this mean?', attachment: file });
+    expect(s.status).toBe('sending');
+  });
+
+  it('a plain message has no attachment field', () => {
+    const s = chatReducer(initialState, { type: 'send_start', id: 'm1', text: 'hi' });
+    expect('attachment' in s.messages[0]).toBe(false);
+  });
+
+  it('keeps the session the backend opened for a first file, but never replaces one', () => {
+    const s = chatReducer(initialState, { type: 'session_started', sessionId: 'new' });
+    expect(s.sessionId).toBe('new');
+    expect(chatReducer({ ...initialState, sessionId: 's1' }, { type: 'session_started', sessionId: 'other' }).sessionId).toBe('s1');
+  });
 });
 
 describe('chatReducer: live agent', () => {
@@ -302,9 +320,54 @@ describe('chatReducer: live agent', () => {
         messages: [{ id: 9, sender: 'SYSTEM', text: 'AGENT_LEFT', senderName: null, createdAt: '' }],
       }),
     });
-    expect(s.messages.map((m) => m.role)).toEqual(['system', 'rating']);
-    expect(s.messages[1]).toMatchObject({ ratingType: 'AGENT', ratingStatus: 'open' });
+    // the goodbye line (BRD message customization), then the rating request
+    expect(s.messages.map((m) => m.systemCode ?? m.role)).toEqual(['AGENT_LEFT', 'GOODBYE', 'rating']);
+    expect(s.messages[2]).toMatchObject({ ratingType: 'AGENT', ratingStatus: 'open' });
     expect(s.ratingAsked).toBe(true);
+  });
+
+  it('asks for an agent rating when the customer ends the chat, but not when they cancel while waiting', () => {
+    const ended = (code: 'CUSTOMER_ENDED' | 'REQUEST_CANCELLED', mode: ChatState['mode']) =>
+      chatReducer({ ...initialState, sessionId: 's1', mode, status: 'sending' }, {
+        type: 'updates_received',
+        updates: updates({
+          state: 'BOT_ACTIVE', handoverStatus: null, cursor: 9,
+          messages: [{ id: 9, sender: 'SYSTEM', text: code, senderName: 'Sokha', createdAt: '' }],
+        }),
+      });
+
+    const afterAgent = ended('CUSTOMER_ENDED', 'agent');
+    expect(afterAgent.mode).toBe('bot');
+    expect(afterAgent.messages.map((m) => m.systemCode ?? m.role)).toEqual(['CUSTOMER_ENDED', 'GOODBYE', 'rating']);
+    expect(afterAgent.messages[0]).toMatchObject({ systemCode: 'CUSTOMER_ENDED', senderName: 'Sokha' });
+
+    const cancelled = ended('REQUEST_CANCELLED', 'waiting');
+    expect(cancelled.mode).toBe('bot');
+    expect(cancelled.messages.map((m) => m.systemCode)).toEqual(['REQUEST_CANCELLED']); // no goodbye, no rating
+
+    expect(chatReducer(afterAgent, { type: 'request_done' }).status).toBe('idle');
+  });
+
+  it('switches to waiting when the message itself opened a request (auto-route)', () => {
+    const sent = chatReducer(initialState, { type: 'send_start', id: 'u1', text: 'my card was stolen' });
+    const s = chatReducer(sent, {
+      type: 'send_success',
+      userMessageId: 'u1',
+      botMessageId: 'b1',
+      response: {
+        sessionId: 's1', reply: null, replyId: null, state: 'HUMAN_ACTIVE', handoverSuggested: false,
+        inputMasked: false, createdAt: '', handoverStatus: 'WAITING',
+      },
+    });
+    expect(s.mode).toBe('waiting');
+    expect(s.messages.map((m) => m.role)).toEqual(['user']); // no bot reply; the waiting message comes live
+  });
+
+  it('remembers a failed end so Retry can repeat it', () => {
+    const s = chatReducer({ ...initialState, sessionId: 's1', mode: 'agent' }, {
+      type: 'request_error', kind: 'network', failed: { type: 'end' },
+    });
+    expect(s).toMatchObject({ status: 'error', failed: { type: 'end' }, mode: 'agent' });
   });
 
   it('adds no bot bubble when the reply is null (message went to the agent)', () => {

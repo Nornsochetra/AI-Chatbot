@@ -82,11 +82,63 @@ public class InputMaskingService {
     // 13+ digits anywhere (card / account numbers without a keyword)
     private static final Pattern LONG_NUMBER = Pattern.compile(digits(13));
 
+    // ---- text read from a file (OCR): screenshots and receipts carry more personal data than typed messages ----
+
+    private static final Pattern EMAIL = Pattern.compile(
+            "(?iu)[\\p{L}0-9._%+-]+@[\\p{L}0-9-]+(?:\\.[\\p{L}0-9-]+)+");
+
+    // every amount with a currency: OCR drops separators and misreads digits ("$1,240" came back as "$1230"), so
+    // "looks like a balance" cannot be told reliably. Promotion amounts ("$10") are masked too.
+    private static final String NUMBER = DIGIT + "(?:[\\d០-៩,.]*" + DIGIT + ")?";
+    private static final String CURRENCY =
+            "(?:\\$|៛|(?<!\\p{L})(?:usd|khr|riels?)(?!\\p{L})|រៀល|ដុល្លារ)";
+    private static final Pattern AMOUNT = Pattern.compile(
+            "(?iu)" + CURRENCY + "\\s?" + NUMBER + "|" + NUMBER + "\\s?" + CURRENCY);
+
+    // an amount after a money word, without a currency: "Balance 1250.00", "សមតុល្យ ១ ២៥០"
+    private static final String MONEY_KEYWORDS =
+            "\\b(?:balance|available|amount|total|debit|credit)\\b|សមតុល្យ|ចំនួនទឹកប្រាក់|ទឹកប្រាក់|សរុប";
+    private static final Pattern AMOUNT_WITH_KEYWORD = Pattern.compile(
+            "(?iu)(" + MONEY_KEYWORDS + ")(" + NOT_DIGIT + "{0,15})" + DIGIT + "(?:[\\d០-៩,. ]*" + DIGIT + ")?");
+
+    // transaction / reference numbers: keyword + a code with at least one digit ("Ref: FT26111200123")
+    private static final String REFERENCE_KEYWORDS =
+            "\\b(?:ref(?:erence)?(?:\\s?no)?|transaction\\s?(?:id|no|number)|txn(?:\\s?id)?|trx(?:\\s?id)?|hash"
+                    + "|invoice(?:\\s?no)?)\\b|លេខយោង|លេខប្រតិបត្តិការ";
+    private static final Pattern REFERENCE = Pattern.compile(
+            "(?iu)(" + REFERENCE_KEYWORDS + ")([^\\p{L}0-9\\n]{0,10})(?=[A-Za-z-]*[0-9])[A-Za-z0-9-]{6,}");
+
+    // 6+ digits without a keyword: account numbers, and card / account numbers OCR read with a separator lost or a
+    // digit wrong, so they no longer match the stricter rules. Dates with - or / and short codes stay readable.
+    private static final Pattern MEDIUM_NUMBER = Pattern.compile(
+            "(?<!" + DIGIT + ")" + DIGIT + "(?: ?" + DIGIT + "){5,}");
+
+    // 8+ digits without a keyword: account numbers are 9-12 digits, and customers often type them bare
+    // ("can you check 001234567?"). BRD: the chatbot must not receive account numbers. Dates with - or / stay.
+    private static final Pattern BARE_ACCOUNT_NUMBER = Pattern.compile(
+            "(?<!" + DIGIT + ")" + DIGIT + "(?: ?" + DIGIT + "){7,}");
+
     /** Full masking, for text sent to the bot (outside the bank): secrets, card / account / ID numbers, phones. */
     public MaskResult mask(String text) {
         String masked = maskSecretsIn(text);
         masked = ID_WITH_KEYWORD.matcher(masked).replaceAll("$1$2" + MASK);
         masked = PHONE.matcher(masked).replaceAll(MASK);
+        masked = BARE_ACCOUNT_NUMBER.matcher(masked).replaceAll(MASK);
+        return new MaskResult(masked, !masked.equals(text));
+    }
+
+    /**
+     * Text read from a file sent to the AI chat: full masking plus emails, money amounts, reference numbers and
+     * any 8+ digit number. Names cannot be found reliably and are not masked (docs/attachments-ai-chat.md).
+     */
+    public MaskResult maskFileText(String text) {
+        // references first: the bare-number rule in mask() would otherwise leave their letters ("FT[REDACTED]")
+        String masked = REFERENCE.matcher(text).replaceAll("$1$2" + MASK);
+        masked = mask(masked).text();
+        masked = EMAIL.matcher(masked).replaceAll(MASK);
+        masked = AMOUNT.matcher(masked).replaceAll(MASK);
+        masked = AMOUNT_WITH_KEYWORD.matcher(masked).replaceAll("$1$2" + MASK);
+        masked = MEDIUM_NUMBER.matcher(masked).replaceAll(MASK);
         return new MaskResult(masked, !masked.equals(text));
     }
 

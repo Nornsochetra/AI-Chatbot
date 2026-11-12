@@ -11,10 +11,12 @@ interface Props {
   onToggleLanguage: () => void;
   onNewChat: () => void;
   onTalkToAgent: () => void;
+  /** waiting: cancel the request at once; with an agent: the parent asks for confirmation first */
+  onEndChat: () => void;
   onClose: () => void;
 }
 
-export function ChatHeader({ t, mode, agentName, embedded, busy, onToggleLanguage, onNewChat, onTalkToAgent, onClose }: Props) {
+export function ChatHeader({ t, mode, agentName, embedded, busy, onToggleLanguage, onNewChat, onTalkToAgent, onEndChat, onClose }: Props) {
   const withAgent = mode === 'agent';
   return (
     <header className={`kb-header ${withAgent ? 'kb-header--agent' : ''}`}>
@@ -45,9 +47,15 @@ export function ChatHeader({ t, mode, agentName, embedded, busy, onToggleLanguag
         )}
       </div>
       <div className="kb-header__actions">
+        {/* one button in the same place, changing with the state: ask for an agent → cancel → end */}
         {mode === 'bot' && (
           <button type="button" className="kb-chip" onClick={onTalkToAgent} disabled={busy}>
             {t.talkToAgent}
+          </button>
+        )}
+        {mode !== 'bot' && (
+          <button type="button" className="kb-chip kb-chip--end" onClick={onEndChat} disabled={busy}>
+            {mode === 'waiting' ? t.cancelRequest : t.endChat}
           </button>
         )}
         {/* a new chat would leave the open handover behind, so only offer it with the bot */}

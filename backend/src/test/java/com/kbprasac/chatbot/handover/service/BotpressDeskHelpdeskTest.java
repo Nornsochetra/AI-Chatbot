@@ -52,7 +52,8 @@ class BotpressDeskHelpdeskTest {
 
     @BeforeEach
     void setUp() {
-        helpdesk = new BotpressDeskHelpdesk(conversations, botEngine, new InputMaskingService(), "https://chat.example/");
+        helpdesk = new BotpressDeskHelpdesk(conversations, botEngine, new InputMaskingService(),
+                new com.kbprasac.chatbot.chat.service.AutoRouteDetector(), "https://chat.example/");
         when(conversations.ensure(anyString(), any())).thenReturn(CONVERSATION);
     }
 
@@ -75,18 +76,82 @@ class BotpressDeskHelpdeskTest {
     }
 
     @Test
-    void messagesWhileWaitingAreHeldBackBecauseTheBotWouldAnswerThem() {
-        helpdesk.customerMessage(handover(HandoverStatus.WAITING), "hello");
+    void messagesWhileWaitingAreShownAtOnceSoTheAgentKnowsTheIssueBeforeJoining() {
+        helpdesk.customerMessage(handover(HandoverStatus.WAITING), message(1L, "hi, I want to know about loans"));
 
-        verify(botEngine, never()).send(any(), any());
+        assertEquals("[Waiting for an agent] hi, I want to know about loans", posted());
     }
 
     @Test
-    void messagesToTheAgentAreFullyMasked() {
-        // agents in our console see phone numbers; Botpress runs AI on the conversation, so it must not
-        helpdesk.customerMessage(handover(HandoverStatus.ACTIVE), "call me on 012 345 678");
+    void urgentWaitingMessagesStandOutSoTheAgentTakesThemFirst() {
+        // the example: one customer asks about information, the other lost money in a transfer
+        helpdesk.customerMessage(handover(HandoverStatus.WAITING), message(1L, "I lost money during a transfer"));
+        assertEquals("[Waiting for an agent · URGENT] I lost money during a transfer", posted());
 
-        assertFalse(posted().contains("012 345 678"));
+        org.mockito.Mockito.clearInvocations(botEngine);
+        helpdesk.customerMessage(handover(HandoverStatus.WAITING), message(2L, "hi, I want some information"));
+        assertEquals("[Waiting for an agent] hi, I want some information", posted());
+    }
+
+    @Test
+    void waitingMessagesWithPersonalDataKeepTheSecureLink() {
+        Handover h = handover(HandoverStatus.WAITING);
+        helpdesk.customerMessage(h, message(5L, "my card was stolen, account 001234567"));
+
+        String text = posted();
+        assertTrue(text.startsWith("[Waiting for an agent · URGENT] my card was stolen, account [REDACTED]"), text);
+        assertTrue(text.contains("/agent/message.html?m=" + h.getId() + ".5"), text);
+        assertFalse(text.contains("001234567"), text);
+    }
+
+    @Test
+    void filesWhileWaitingAndFilesSentToTheAssistantAreShownAtOnce() {
+        Handover h = handover(HandoverStatus.WAITING);
+        Attachment receipt = Attachment.builder().id(UUID.randomUUID()).handoverId(h.getId()).sessionId("s1")
+                .fileName("receipt.pdf").contentType("application/pdf").sizeBytes(4096).build();
+        helpdesk.customerAttachment(h, receipt);
+        assertEquals("[Waiting for an agent] " + helpdesk.fileNotice(receipt), posted());
+
+        org.mockito.Mockito.clearInvocations(botEngine);
+        Attachment earlier = Attachment.builder().id(UUID.randomUUID()).handoverId(h.getId()).sessionId("s1")
+                .fileName("error.png").contentType("image/png").sizeBytes(2048).build();
+        helpdesk.filesSentBefore(h, List.of(earlier));
+        assertEquals("[Files the customer sent to the assistant before asking for an agent]\n- "
+                + helpdesk.fileNotice(earlier), posted());
+
+        org.mockito.Mockito.clearInvocations(botEngine);
+        helpdesk.filesSentBefore(h, List.of());
+        verify(botEngine, never()).send(any(), any());
+    }
+
+    private static HandoverMessage message(Long id, String text) {
+        return HandoverMessage.builder().id(id).sender(MessageSender.CUSTOMER).text(text).build();
+    }
+
+    @Test
+    void personalDataIsHiddenFromBotpressAndTheAgentGetsASecureLink() {
+        // Botpress runs AI on the conversation, so it must not get the account number; the agent may see it
+        Handover h = handover(HandoverStatus.ACTIVE);
+        helpdesk.customerMessage(h, message(42L, "my account is 001234567, call me on 012 345 678"));
+
+        String text = posted();
+        assertFalse(text.contains("001234567"), text);
+        assertFalse(text.contains("012 345 678"), text);
+        assertTrue(text.contains("[REDACTED]"), text);
+        assertTrue(text.contains("🔒 Personal details hidden from the AI. Open securely (agent sign-in required): "
+                + "https://chat.example/agent/message.html?m=" + h.getId() + ".42"), text);
+        assertFalse(text.contains("&"), "Desk turns & in links into &amp;");
+    }
+
+    @Test
+    void messagesWithoutPersonalDataGetNoLink() {
+        helpdesk.customerMessage(handover(HandoverStatus.ACTIVE), message(1L, "my card is blocked"));
+        assertEquals("my card is blocked", posted());
+
+        org.mockito.Mockito.clearInvocations(botEngine);
+        // a secret was already hidden when stored, and stays hidden on the secure page too: nothing more to see
+        helpdesk.customerMessage(handover(HandoverStatus.ACTIVE), message(2L, "my OTP is [REDACTED]"));
+        assertFalse(posted().contains("Open securely"));
     }
 
     @Test
@@ -105,26 +170,66 @@ class BotpressDeskHelpdeskTest {
     }
 
     @Test
-    void joiningAgentGetsTheWaitingMessagesInOneBlock() {
-        Handover h = handover(HandoverStatus.ACTIVE);
-        List<HandoverMessage> messages = List.of(
-                HandoverMessage.builder().sender(MessageSender.SYSTEM).text("WAITING").build(),
-                HandoverMessage.builder().sender(MessageSender.CUSTOMER).text("my card is blocked").build(),
-                HandoverMessage.builder().sender(MessageSender.CUSTOMER).text("call 012 345 678").build());
-
-        helpdesk.forwardWaitingMessages(h, messages);
-
+    void autoRoutedRequestsSayWhyAndUrgentOnesStandOut() {
+        Handover urgent = handover(HandoverStatus.WAITING);
+        urgent.setReason(HandoverReason.AUTO_URGENT);
+        helpdesk.ticketOpened(urgent, List.of());
         String text = posted();
-        assertEquals("[While waiting for an agent, the customer wrote]\n- my card is blocked\n- call "
-                + new InputMaskingService().mask("012 345 678").text(), text);
+        assertTrue(text.startsWith("[Live agent requested · URGENT]"), text);
+        assertTrue(text.contains("routed automatically: the customer's message looks urgent"), text);
+
+        org.mockito.Mockito.clearInvocations(botEngine);
+        Handover failed = handover(HandoverStatus.WAITING);
+        failed.setReason(HandoverReason.AUTO_BOT_FAILED);
+        helpdesk.ticketOpened(failed, List.of());
+        assertTrue(posted().contains("the bot could not answer twice in a row"));
     }
 
     @Test
-    void nothingToForwardWhenTheCustomerWroteNothing() {
-        helpdesk.forwardWaitingMessages(handover(HandoverStatus.ACTIVE),
-                List.of(HandoverMessage.builder().sender(MessageSender.SYSTEM).text("WAITING").build()));
+    void theAgentIsToldWhichChannelTheCustomerUses() {
+        Handover fromWebsite = handover(HandoverStatus.WAITING);
+        helpdesk.ticketOpened(fromWebsite, List.of());
+        assertTrue(posted().contains("talk to a live agent from the Website"));
 
-        verify(botEngine, never()).send(any(), any());
+        org.mockito.Mockito.clearInvocations(botEngine);
+        Handover fromApp = handover(HandoverStatus.WAITING);
+        fromApp.setChannel(Channel.MOBILE_APP);
+        helpdesk.ticketOpened(fromApp, List.of());
+        assertTrue(posted().contains("talk to a live agent from the Mobile Banking App"));
+    }
+
+    @Test
+    void anAgentJoiningOnTheirOwnIsToldTheChannelToo() {
+        Handover h = handover(HandoverStatus.ACTIVE);
+        h.setChannel(Channel.MOBILE_APP);
+
+        helpdesk.agentTookOver(h);
+
+        assertEquals("[You joined this chat] The customer is chatting from the Mobile Banking App.", posted());
+    }
+
+    @Test
+    void anAgentNobodyAskedForIsToldOnceAndTheBotCountsAsPaused() {
+        helpdesk.notConnected("s1", Channel.WEBSITE, "sokha chan", BotpressDeskHelpdesk.NotConnected.NO_REQUEST, null, 0);
+        helpdesk.notConnected("s1", Channel.WEBSITE, "sokha chan", BotpressDeskHelpdesk.NotConnected.NO_REQUEST, null, 0);
+
+        assertTrue(posted().startsWith("[Not connected] This customer has not asked for a live agent"), "posted once");
+        assertTrue(helpdesk.botPausedByInbox("s1"), "Desk pauses the bot while the agent is in the chat");
+
+        helpdesk.deskTicketClosed("s1");
+        assertFalse(helpdesk.botPausedByInbox("s1"), "the agent closed the ticket: the bot answers again");
+    }
+
+    @Test
+    void aSecondAgentAndAnAgentAtTheLimitAreToldWhy() {
+        helpdesk.notConnected("s1", Channel.WEBSITE, "dara keo", BotpressDeskHelpdesk.NotConnected.OTHER_AGENT, "Sokha", 0);
+        assertEquals("[Not connected] Sokha is already helping this customer. Your messages are not shown to them.",
+                posted());
+        assertFalse(helpdesk.botPausedByInbox("s1"), "the chat is with Sokha, not the bot");
+
+        org.mockito.Mockito.clearInvocations(botEngine);
+        helpdesk.notConnected("s2", Channel.WEBSITE, "dara keo", BotpressDeskHelpdesk.NotConnected.AGENT_AT_LIMIT, null, 2);
+        assertTrue(posted().startsWith("[Not connected] You already have 2 live chats, the most allowed at once."));
     }
 
     @Test
@@ -141,9 +246,37 @@ class BotpressDeskHelpdeskTest {
     }
 
     @Test
+    void customerEndingAnAgentChatAsksTheAgentToCloseAndHoldsTheBotUntilThen() {
+        Handover h = handover(HandoverStatus.CLOSED);
+        h.setAcceptedAt(Instant.now());
+        h.setCloseReason(HandoverCloseReason.CUSTOMER_ENDED);
+
+        helpdesk.ticketClosed(h);
+
+        String text = posted();
+        assertTrue(text.startsWith("[Customer ended the chat]"), text);
+        assertTrue(text.contains("Please close this ticket"), text);
+        assertTrue(helpdesk.stillOpenAfterOurClose("s1"));
+
+        helpdesk.deskTicketClosed("s1");
+        assertFalse(helpdesk.stillOpenAfterOurClose("s1"));
+    }
+
+    @Test
+    void customerCancellingBeforeAnAgentJoinedDoesNotHoldTheBot() {
+        Handover h = handover(HandoverStatus.CLOSED);
+        h.setCloseReason(HandoverCloseReason.CUSTOMER_ENDED);
+
+        helpdesk.ticketClosed(h);
+
+        assertTrue(posted().startsWith("[Customer cancelled the request]"));
+        assertFalse(helpdesk.stillOpenAfterOurClose("s1"));
+    }
+
+    @Test
     void botpressFailureDoesNotBreakTheHandover() {
         doThrow(new IllegalStateException("down")).when(botEngine).send(any(), any());
 
-        helpdesk.customerMessage(handover(HandoverStatus.ACTIVE), "hello");
+        helpdesk.customerMessage(handover(HandoverStatus.ACTIVE), message(1L, "hello"));
     }
 }

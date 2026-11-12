@@ -18,7 +18,7 @@ interface Props {
 }
 
 /** said to the customer like a chat reply, not shown as a grey status line */
-const SPOKEN_CODES = new Set(['WAITING', 'WAITING_REMINDER']);
+const SPOKEN_CODES = new Set(['WAITING', 'WAITING_REMINDER', 'GOODBYE']);
 
 export function MessageBubble({ message, t, onTalkToAgent, onSpeak, speakState }: Props) {
   if (message.role === 'system' && message.systemCode && SPOKEN_CODES.has(message.systemCode)) {
@@ -38,6 +38,8 @@ export function MessageBubble({ message, t, onTalkToAgent, onSpeak, speakState }
 
   if (message.role === 'user' && message.attachment) {
     const file = message.attachment;
+    // a file sent to the AI chat carries the customer's question; older bubbles have the file name as text
+    const caption = message.text !== file.fileName ? message.text : '';
     return (
       <div className="kb-row kb-row--user">
         <div className={`kb-bubble kb-bubble--user kb-file ${file.removed ? 'kb-file--removed' : ''}`}>
@@ -51,7 +53,9 @@ export function MessageBubble({ message, t, onTalkToAgent, onSpeak, speakState }
             <span className="kb-file__size">{formatSize(file.sizeBytes)}</span>
           </div>
           {file.removed && <div className="kb-file__status">{t.attachRemoved}</div>}
+          {caption && <div className="kb-file__caption">{caption}</div>}
         </div>
+        {message.masked && <Notice kind="info">{t.maskedNotice}</Notice>}
       </div>
     );
   }
@@ -115,7 +119,7 @@ export function MessageBubble({ message, t, onTalkToAgent, onSpeak, speakState }
   );
 }
 
-function formatSize(bytes: number): string {
+export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;

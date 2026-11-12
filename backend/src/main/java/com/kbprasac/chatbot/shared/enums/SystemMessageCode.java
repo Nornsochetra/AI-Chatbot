@@ -9,5 +9,9 @@ public enum SystemMessageCode {
     AGENT_LEFT,
     /** the agent removed a file the customer uploaded */
     ATTACHMENT_REMOVED,
-    INACTIVITY_CLOSED
+    INACTIVITY_CLOSED,
+    /** the customer ended the chat with the agent */
+    CUSTOMER_ENDED,
+    /** the customer cancelled the request before an agent joined */
+    REQUEST_CANCELLED
 }

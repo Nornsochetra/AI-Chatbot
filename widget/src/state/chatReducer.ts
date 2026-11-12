@@ -1,5 +1,6 @@
 import type {
   AttachmentResponse,
+  ReadStatus,
   ChatErrorKind,
   ChatResponse,
   HandoverReason,
@@ -24,7 +25,7 @@ export interface ChatMessage {
   replyId?: string;
   /** agent message / agent joined or left: the agent's login username */
   senderName?: string;
-  /** user message: a file the customer sent to the agent */
+  /** user message: a file the customer sent (to the agent, or to the AI chat with `text` as its question) */
   attachment?: SentAttachment;
   /** user message sent by voice: the recording; `text` is its transcript (empty while transcribing) */
   voice?: VoiceClip;
@@ -46,6 +47,14 @@ export interface SentAttachment {
   removed?: boolean;
 }
 
+/** A file picked in the AI chat, shown above the composer until the customer sends it with the next message. */
+export interface DraftFile extends SentAttachment {
+  readStatus: ReadStatus | null;
+  /** the masked text the bot will read */
+  readText?: string;
+  readMasked: boolean;
+}
+
 export interface VoiceClip {
   /** local recording, only valid while the page is open (the audio is never uploaded for keeping) */
   url?: string;
@@ -61,8 +70,9 @@ export interface VoiceClip {
 export type ChatMode = 'bot' | 'waiting' | 'agent';
 
 export type FailedAction =
-  | { type: 'message'; text: string; messageId: string }
-  | { type: 'handover'; reason: HandoverReason };
+  | { type: 'message'; text: string; messageId: string; attachment?: SentAttachment }
+  | { type: 'handover'; reason: HandoverReason }
+  | { type: 'end' };
 
 export interface ChatState {
   sessionId?: string;
@@ -81,11 +91,13 @@ export interface ChatState {
 }
 
 export type ChatAction =
-  | { type: 'send_start'; id: string; text: string; retry?: boolean }
+  | { type: 'send_start'; id: string; text: string; retry?: boolean; attachment?: SentAttachment }
+  | { type: 'session_started'; sessionId: string }
   | { type: 'send_success'; userMessageId: string; botMessageId: string; response: ChatResponse }
   | { type: 'handover_start' }
   | { type: 'handover_success'; response: HandoverResponse }
   | { type: 'request_error'; kind: ChatErrorKind; failed: FailedAction }
+  | { type: 'request_done' }
   | { type: 'updates_received'; updates: SessionUpdates }
   | { type: 'attachment_sent'; id: string; response: AttachmentResponse; previewUrl?: string }
   | { type: 'voice_recorded'; id: string; voice: VoiceClip }
@@ -98,7 +110,7 @@ export type ChatAction =
 export const initialState: ChatState = { messages: [], mode: 'bot', cursor: 0, ratingAsked: false, status: 'idle' };
 
 /** handover events after which the customer is asked to rate the agent (requirement: immediately) */
-const AGENT_CHAT_ENDED: SystemCode[] = ['AGENT_LEFT', 'INACTIVITY_CLOSED'];
+const AGENT_CHAT_ENDED: SystemCode[] = ['AGENT_LEFT', 'INACTIVITY_CLOSED', 'CUSTOMER_ENDED'];
 
 function modeFor(handoverStatus: HandoverStatus | null): ChatMode {
   if (handoverStatus === 'ACTIVE') return 'agent';
@@ -132,7 +144,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return {
         ...state,
         // a retry reuses the user bubble that is already shown
-        messages: action.retry ? state.messages : [...state.messages, { id: action.id, role: 'user', text: action.text }],
+        messages: action.retry
+          ? state.messages
+          : [...state.messages, { id: action.id, role: 'user', text: action.text, ...(action.attachment && { attachment: action.attachment }) }],
         status: 'sending',
         error: undefined,
         failed: undefined,
@@ -152,8 +166,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           replyId: response.replyId ?? undefined,
         });
       }
-      return { ...state, sessionId: response.sessionId, messages, status: 'idle' };
+      return {
+        ...state,
+        sessionId: response.sessionId,
+        messages,
+        status: 'idle',
+        // auto-route: the message itself opened a live agent request
+        mode: response.handoverStatus ? modeFor(response.handoverStatus) : state.mode,
+      };
     }
+
+    case 'session_started':
+      // the first thing sent was a file: the backend opened the session
+      return state.sessionId ? state : { ...state, sessionId: action.sessionId };
 
     case 'handover_start':
       return { ...state, status: 'sending', error: undefined, failed: undefined };
@@ -169,6 +194,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
     case 'request_error':
       return { ...state, status: 'error', error: action.kind, failed: action.failed };
+
+    case 'request_done':
+      return { ...state, status: 'idle' };
 
     case 'updates_received': {
       const { updates } = action;
@@ -191,6 +219,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           const code = m.text as SystemCode;
           added.push({ id: `live-${m.id}`, role: 'system', text: m.text, systemCode: code, senderName });
           if (AGENT_CHAT_ENDED.includes(code)) {
+            // BRD message customization: a goodbye in the customer's language, then the rating request
+            added.push({ id: `goodbye-${m.id}`, role: 'system', text: '', systemCode: 'GOODBYE' });
             added.push(ratingCard(`rating-${m.id}`, 'AGENT'));
             ratingAsked = true;
           }

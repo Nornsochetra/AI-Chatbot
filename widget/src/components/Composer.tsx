@@ -3,6 +3,8 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import { ALLOWED_ATTACHMENT_TYPES, ChatApiError, MAX_ATTACHMENT_BYTES } from '../api/chatApi';
 import type { Messages } from '../i18n';
 import { isRecordingSupported, useRecorder } from '../lib/useRecorder';
+import type { DraftFile } from '../state/chatReducer';
+import { formatSize } from './MessageBubble';
 
 export const MAX_LENGTH = 2000;
 const COUNTER_FROM = MAX_LENGTH - 200;
@@ -12,7 +14,7 @@ export const MAX_RECORDING_SECONDS = 60;
 /** shorter clicks are treated as "nothing said" without calling the backend */
 const MIN_RECORDING_SECONDS = 0.7;
 
-type Notice = 'denied' | 'unavailable' | 'noSpeech' | 'fileType' | 'fileTooLarge' | 'fileNeedsAgent' | 'fileFailed' | null;
+type Notice = 'denied' | 'unavailable' | 'noSpeech' | 'fileType' | 'fileTooLarge' | 'fileLimit' | 'fileFailed' | null;
 
 interface Props {
   t: Messages;
@@ -22,11 +24,16 @@ interface Props {
   onVoice: (audio: Blob, seconds: number) => Promise<void>;
   /** called on each keystroke (the parent throttles it), so a live agent can see the customer typing */
   onTyping?: () => void;
-  /** file upload; only passed while a live agent is chatting (the AI must not receive files) */
+  /** file from the 📎: in the AI chat it becomes the draft below; in a live chat it goes to the agent */
   onAttach?: (file: File) => Promise<void>;
+  /** AI chat: the file is read on the server while uploading ("Reading your file…") */
+  readingFiles?: boolean;
+  /** AI chat file waiting to be sent with the next message, with the text the bot will read */
+  draft?: DraftFile | null;
+  onDiscardDraft?: () => void;
 }
 
-export function Composer({ t, disabled, onSend, onVoice, onTyping, onAttach }: Props) {
+export function Composer({ t, disabled, onSend, onVoice, onTyping, onAttach, readingFiles, draft, onDiscardDraft }: Props) {
   const [text, setText] = useState('');
   const [transcribing, setTranscribing] = useState(false);
   const [voiceNotice, setVoiceNotice] = useState<Notice>(null);
@@ -96,7 +103,7 @@ export function Composer({ t, disabled, onSend, onVoice, onTyping, onAttach }: P
       await onAttach(file);
     } catch (e) {
       const kind = e instanceof ChatApiError ? e.kind : 'server';
-      setVoiceNotice(kind === 'conflict' ? 'fileNeedsAgent' : kind === 'validation' ? 'fileType' : 'fileFailed');
+      setVoiceNotice(kind === 'limit' ? 'fileLimit' : kind === 'validation' ? 'fileType' : 'fileFailed');
     } finally {
       setUploading(false);
     }
@@ -105,7 +112,8 @@ export function Composer({ t, disabled, onSend, onVoice, onTyping, onAttach }: P
   function submit(e?: FormEvent) {
     e?.preventDefault();
     const value = text.trim();
-    if (!value || disabled) return;
+    // a file alone can be sent; the question is optional
+    if ((!value && !draft) || disabled) return;
     onSend(value);
     setText('');
     setVoiceNotice(null);
@@ -126,12 +134,39 @@ export function Composer({ t, disabled, onSend, onVoice, onTyping, onAttach }: P
     noSpeech: t.voiceNoSpeech,
     fileType: t.attachWrongType,
     fileTooLarge: t.attachTooLarge,
-    fileNeedsAgent: t.attachNeedsAgent,
+    fileLimit: t.attachLimit,
     fileFailed: t.attachFailed,
   };
 
   return (
     <form className="kb-composer" onSubmit={submit}>
+      {draft && (
+        <div className="kb-draft" role="group" aria-label={t.attachDraftLabel}>
+          <div className="kb-draft__head">
+            {draft.previewUrl && <img className="kb-draft__thumb" src={draft.previewUrl} alt="" />}
+            <span className="kb-draft__name">
+              <span aria-hidden="true">📎 </span>
+              {draft.fileName}
+            </span>
+            <span className="kb-file__size">{formatSize(draft.sizeBytes)}</span>
+            <button type="button" className="kb-draft__remove" onClick={onDiscardDraft} aria-label={t.attachRemove} title={t.attachRemove}>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path d="M6 6l12 12M18 6L6 18" />
+              </svg>
+            </button>
+          </div>
+          {draft.readStatus === 'READ' && draft.readText ? (
+            <>
+              <div className="kb-draft__label">{t.attachBotWillRead}</div>
+              {/* plain text: exactly what the bot gets, after masking */}
+              <div className="kb-draft__text">{draft.readText}</div>
+              {draft.readMasked && <div className="kb-draft__hint">{t.attachTextMasked}</div>}
+            </>
+          ) : (
+            <div className="kb-draft__hint">{draft.readStatus === 'SKIPPED' ? t.attachNotRead : t.attachNoText}</div>
+          )}
+        </div>
+      )}
       <div className="kb-composer__row">
         {onAttach && (
           <>
@@ -149,7 +184,8 @@ export function Composer({ t, disabled, onSend, onVoice, onTyping, onAttach }: P
               type="button"
               className="kb-mic"
               onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
+              // one file per message
+              disabled={uploading || !!draft}
               aria-label={t.attach}
               title={t.attach}
             >
@@ -193,7 +229,9 @@ export function Composer({ t, disabled, onSend, onVoice, onTyping, onAttach }: P
           rows={1}
           value={text}
           maxLength={MAX_LENGTH}
-          placeholder={recorder.recording ? t.voiceRecording : transcribing ? t.voiceTranscribing : t.placeholder}
+          placeholder={
+            recorder.recording ? t.voiceRecording : transcribing ? t.voiceTranscribing : draft ? t.attachQuestionPlaceholder : t.placeholder
+          }
           aria-label={t.placeholder}
           onChange={(e) => {
             setText(e.target.value);
@@ -201,7 +239,7 @@ export function Composer({ t, disabled, onSend, onVoice, onTyping, onAttach }: P
           }}
           onKeyDown={onKeyDown}
         />
-        <button type="submit" className="kb-button kb-button--primary kb-composer__send" disabled={disabled || !text.trim()}>
+        <button type="submit" className="kb-button kb-button--primary kb-composer__send" disabled={disabled || (!text.trim() && !draft)}>
           {t.send}
         </button>
       </div>
@@ -215,7 +253,7 @@ export function Composer({ t, disabled, onSend, onVoice, onTyping, onAttach }: P
             {noticeText[voiceNotice]}
           </span>
         ) : (
-          <span>{uploading ? t.attachUploading : onAttach ? t.attachWarning : t.safetyHint}</span>
+          <span>{uploading ? (readingFiles ? t.attachReading : t.attachUploading) : onAttach ? t.attachWarning : t.safetyHint}</span>
         )}
         {text.length >= COUNTER_FROM && (
           <span className="kb-composer__counter">

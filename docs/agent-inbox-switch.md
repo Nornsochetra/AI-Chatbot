@@ -38,9 +38,11 @@ Our handover table stays the source of truth (WAITING → ACTIVE → CLOSED). On
 | | `console` (today) | `botpress-desk` |
 |---|---|---|
 | Where agents work | Our `/agent` page | Botpress Desk |
-| Customer taps "Talk to an agent" | Handover WAITING | Same, and a "[Live agent requested]" line is posted to the conversation (the backend cannot flag the Desk ticket itself, see section 6) |
+| Customer taps "Talk to an agent" | Handover WAITING | Same, and a "[Live agent requested]" line is posted to the conversation, naming the channel ("from the Website" / "from the Mobile Banking App"; Desk itself shows "Webchat" for both). The backend cannot flag the Desk ticket itself, see section 6 |
+| Desk agent joins a chat the customer did not escalate (or cancelled / ended) | Nothing for the customer | "[Not connected] This customer has not asked for a live agent…". Desk pauses the bot; the customer gets "The assistant will answer again in a moment" until the ticket is closed. With `AGENT_TAKEOVER=true`: handover ACTIVE and "[You joined this chat] The customer is chatting from the Website / Mobile Banking App." |
+| A second agent joins, or an agent already at `AGENT_MAX_CHATS` | Nothing for the customer | "[Not connected] Sokha is already helping this customer…" / "[Not connected] You already have 2 live chats…" (see [handover.md](handover.md), assignment rules) |
 | Waiting message, queue position, reminders | Yes | Yes (unchanged, from our table) |
-| Customer messages during the chat | Saved in our table | Saved in our table **and** posted to the Botpress chat so the Desk agent sees them. Messages written while waiting are sent in one block when the agent joins (before that, the bot would answer each one) |
+| Customer messages during the chat | Saved in our table | Saved in our table **and** posted to the Botpress chat so the Desk agent sees them. **Since 2026-11-12, messages and files written while waiting are posted at once**, tagged `[Waiting for an agent]`, or `[Waiting for an agent · URGENT]` when the message looks urgent (fraud, lost money, stolen card, wrong transfer…), so the agent knows each customer's issue before joining and can take the urgent one first (BRD IV.C: context "before or during handover"). Until then they were held back and sent in one block on join, because the bot is still active while waiting and replies to them in Desk; the customer never sees those replies, and the Studio instruction "do not reply to messages starting with [" removes them |
 | Agent replies | Typed in our console | Typed in Desk; the backend listens to the Botpress chat and passes them to the widget as agent bubbles |
 | Agent joins | Accept button | Desk "agent assigned" event marks it ACTIVE and shows "*agent* joined" (the agent's first name from Desk). An agent can also join a chat nobody escalated: the handover then starts as ACTIVE with reason `AGENT_INITIATED` |
 | Chat ends | Close button | Ticket closed in Desk; the bot answers again afterwards |
@@ -56,7 +58,7 @@ Our handover table stays the source of truth (WAITING → ACTIVE → CLOSED). On
 
 | Piece | What it does |
 |---|---|
-| `BotpressDeskHelpdesk` (`handover/service`) | The second `HelpdeskPort`. Posts to the session's Botpress conversation: the "[Live agent requested]" line, customer messages (fully masked), the messages written while waiting (one block when the agent joins), file notices, and a "[Chat ended]" line when our side closes the chat (customer inactivity) |
+| `BotpressDeskHelpdesk` (`handover/service`) | The second `HelpdeskPort`. Posts to the session's Botpress conversation: the "[Live agent requested]" line, customer messages (fully masked, with a secure link when personal data was hidden), messages and files written while waiting (at once, tagged `[Waiting for an agent]`), files sent to the assistant before the request (with the request), file notices, and a "[Chat ended]" line when our side closes the chat (customer inactivity) |
 | `BotpressDeskListener` | Keeps the Botpress live stream (`GET /conversations/{id}/listen`) open for **every** chat session, because a Desk agent can join any bot chat. One virtual thread per session; stops once the session has expired and no handover is open |
 | `BotpressDeskEvents` | Turns stream events into handover changes: agent assigned → `accept` (or `startByAgent`), agent reply → `agentMessage`, ticket closed → `close` |
 | `BotpressMessages` (`chat/service`) | Tells bot answers, Desk agent replies and Desk notices apart (section 6). `BotpressBotEngine` now ignores agent replies and notices when it waits for a bot answer |
@@ -132,6 +134,18 @@ Customer (widget)        Our backend                         Botpress Desk      
 3. Is there SSO for agents, or do Desk agents get a separate login for the file page?
 4. Is a text notice with a link (no personal data) acceptable in Botpress Cloud?
 
+## 5b. Personal data in live chat messages: "link, not text" (added 2026-11-12)
+
+BRD: the AI must not collect personal data, but agents may collect it in a live chat. Botpress runs AI on Desk conversations (summaries, suggested replies), so everything posted to Desk stays fully masked, and personal data gets the same treatment as files:
+
+1. In a live chat the customer writes "my account is 001234567". We store it with **secrets only** masked (OTP, PIN, CVV, password), as for any agent message.
+2. Desk gets the fully masked text and, **only when masking hid personal data** (account, card, phone, ID numbers), a link:
+   `my account is [REDACTED]` / `🔒 Personal details hidden from the AI. Open securely (agent sign-in required): <PUBLIC_BASE_URL>/agent/message.html?m=<handover id>.<message id>`
+3. The agent signs in (same login as the file page) and sees `my account is 001234567`. Secrets stay `[REDACTED]` there too: nobody ever sees them.
+4. Every view is audited (`MESSAGE_VIEWED`); the message is deleted with the chat history (`CHAT_RETENTION_DAYS`), after which the link says "no longer available".
+
+Messages typed **while chatting with the bot** (before any agent) stay masked and are not kept: the BRD forbids the AI chat from collecting personal data, and the agent verifies the customer after joining anyway. One mode only (no "plain text to Desk" switch): sending personal data to Botpress would need Security approval of the vendor answers (BRD VI.B) first.
+
 ## 6. Botpress behaviour (step 0, verified 2026-11-11)
 
 A probe conversation (ticket `tkt_ek6zuy9tar`) recorded the raw live stream while an agent joined, replied and closed in Desk.
@@ -160,7 +174,7 @@ A probe conversation (ticket `tkt_ek6zuy9tar`) recorded the raw live stream whil
 |---|---|
 | `GET /api/v1/chat/config` | ✅ `BOTPRESS_DESK`, `agentMayJoinAnytime: true` |
 | Chat A: bot answer, then "Talk to an agent" | ✅ WAITING, queue #1, waiting message and reminders; "[Live agent requested]" line in Desk |
-| Message while waiting ("my phone is 012 345 678") | ✅ Not sent to Botpress until the agent joined, then sent in one block with the phone number masked |
+| Message while waiting ("my phone is 012 345 678") | ✅ Not sent to Botpress until the agent joined, then sent in one block with the phone number masked (2026-11-11; since 2026-11-12 posted at once, see section 4) |
 | Agent joins chat A in Desk | ✅ Widget: "*agent* joined" with the agent's first name |
 | Customer uploads an image | ✅ Desk shows only "📎 Customer sent a file (image, 70 B)" and the link, no file name |
 | Agent opens the link | ✅ Our file page asked for the agent login and showed the image; audit `ATTACHMENT_VIEWED` |
@@ -185,7 +199,7 @@ Unit tests: `BotpressDeskHelpdeskTest`, `BotpressDeskEventsTest` (event shapes c
 - **Events sent while a stream reconnects are missed.** An agent reply still counts as joining, but a missed close leaves the handover open until the next close.
 - **Sessions are in memory.** After a backend restart, open Desk chats lose their Botpress link (same limit as the bot chat today).
 - **One stream per chat session** in Desk mode. Fine for R&D volume; at scale, check Botpress limits or use a Botpress webhook / integration instead.
-- **If our side closes the chat** (auto-close, off by default), the Desk ticket stays open and the bot stays silent until the agent closes it; the agent gets a "[Chat ended]" line asking them to.
+- **If our side closes the chat** (the customer taps "End chat", or auto-close, off by default), the Desk ticket stays open and Botpress keeps the bot silent until the agent closes it. The agent gets a line asking them to close the ticket ("[Customer ended the chat] … Please close this ticket so the assistant can answer again"). Until then the customer's messages get "The agent is still closing your previous chat…" instead of the usual fallback, and Desk replies are not shown to the customer, so they are not pulled back into the chat. If the customer cancels **before** an agent joined, the bot was never silenced; the agent only gets "[Customer cancelled the request]".
 - **The `/agent` console on an older backend** does not know the `AGENT_INITIATED` reason; restart every backend on the same database after upgrading.
 - **The bot's own text** (name, greeting, knowledge) comes from Botpress Studio, not from this repo.
 - **Agents sign in again to open each file in a new tab.** The file page cannot reuse the Desk login (Desk does not share its login with outside pages). This is intended: the link alone must never open a customer file. Planned: one sign-in per shift through the admin portal, see [flow.md section 8](flow.md#8-admin-portal).

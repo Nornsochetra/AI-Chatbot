@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ChatApiError, getUpdates, readAloud, requestHandover, sendMessage, submitRating, transcribe, uploadAttachment } from './chatApi';
+import { ChatApiError, discardFile, endHandover, getUpdates, readAloud, requestHandover, sendFile, sendMessage, submitRating, transcribe } from './chatApi';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -78,19 +78,47 @@ describe('voice calls', () => {
 });
 
 describe('attachment calls', () => {
-  it('uploads the file as multipart field "file"', async () => {
-    const fetchFn = mockFetch(() => ok({ id: 'a1', fileName: 'x.png', contentType: 'image/png', sizeBytes: 3, createdAt: '' }));
-    const res = await uploadAttachment('http://api', 's1', new File(['abc'], 'x.png', { type: 'image/png' }));
+  it('sends the file as multipart with the channel and session', async () => {
+    const fetchFn = mockFetch(() =>
+      ok({
+        sessionId: 's1',
+        attachment: { id: 'a1', fileName: 'x.png', contentType: 'image/png', sizeBytes: 3, createdAt: '' },
+        draft: true,
+        readStatus: 'READ',
+        text: 'Error 403',
+        textMasked: false,
+      }),
+    );
+    const res = await sendFile('http://api', { sessionId: 's1', channel: 'WEBSITE', file: new File(['abc'], 'x.png', { type: 'image/png' }) });
 
-    expect(res.id).toBe('a1');
+    expect(res.draft).toBe(true);
+    expect(res.text).toBe('Error 403');
     const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('http://api/api/v1/chat/sessions/s1/attachments');
-    expect((init.body as FormData).get('file')).toBeInstanceOf(Blob);
+    expect(url).toBe('http://api/api/v1/chat/attachments');
+    const form = init.body as FormData;
+    expect(form.get('file')).toBeInstanceOf(Blob);
+    expect(form.get('channel')).toBe('WEBSITE');
+    expect(form.get('sessionId')).toBe('s1');
   });
 
-  it('maps 409 (no agent yet) to conflict', async () => {
-    mockFetch(() => Promise.resolve(new Response('{}', { status: 409 })));
-    await expect(uploadAttachment('http://api', 's1', new File(['a'], 'a.png'))).rejects.toMatchObject({ kind: 'conflict' });
+  it('leaves the session out for the first file of a chat', async () => {
+    const fetchFn = mockFetch(() => ok({ sessionId: 'new', attachment: {}, draft: true, readStatus: 'SKIPPED', text: null, textMasked: false }));
+    await sendFile('http://api', { channel: 'WEBSITE', file: new File(['a'], 'a.png') });
+    const [, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.body as FormData).has('sessionId')).toBe(false);
+  });
+
+  it('maps 429 (files per chat) to limit', async () => {
+    mockFetch(() => Promise.resolve(new Response('{}', { status: 429 })));
+    await expect(sendFile('http://api', { channel: 'WEBSITE', file: new File(['a'], 'a.png') })).rejects.toMatchObject({ kind: 'limit' });
+  });
+
+  it('discards an unsent file', async () => {
+    const fetchFn = mockFetch(() => Promise.resolve(new Response(null, { status: 204 })));
+    await discardFile('http://api', 's 1', 'a1');
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('http://api/api/v1/chat/sessions/s%201/attachments/a1');
+    expect(init.method).toBe('DELETE');
   });
 });
 
@@ -103,6 +131,15 @@ describe('handover calls', () => {
     const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('http://api/api/v1/chat/handover');
     expect(JSON.parse(init.body as string)).toEqual({ sessionId: 's1', channel: 'WEBSITE', reason: 'USER_REQUEST' });
+  });
+
+  it('ends the live chat for the session', async () => {
+    const fetchFn = mockFetch(() => Promise.resolve(new Response(null, { status: 204 })));
+    await endHandover('http://api', 's 1');
+
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('http://api/api/v1/chat/sessions/s%201/handover/close');
+    expect(init.method).toBe('POST');
   });
 
   it('posts a rating and maps 409 (already rated) to a conflict error', async () => {

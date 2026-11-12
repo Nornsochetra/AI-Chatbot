@@ -52,8 +52,14 @@ public class Handover {
     @Column(name = "close_reason")
     private HandoverCloseReason closeReason;
 
+    /** first name shown to the customer */
+    /** first name shown to the customer */
     @Column(name = "agent_name")
     private String agentName;
+
+    /** who the agent is, for the assignment rules: the full Desk name lower-cased, or the console login */
+    @Column(name = "agent_key")
+    private String agentKey;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;

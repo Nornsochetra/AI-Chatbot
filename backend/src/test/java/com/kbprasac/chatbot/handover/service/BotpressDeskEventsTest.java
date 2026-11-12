@@ -4,11 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -24,6 +26,8 @@ import org.mockito.quality.Strictness;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kbprasac.chatbot.config.HandoverProperties;
+import com.kbprasac.chatbot.handover.service.BotpressDeskHelpdesk.NotConnected;
 import com.kbprasac.chatbot.shared.entity.Handover;
 import com.kbprasac.chatbot.shared.enums.Channel;
 import com.kbprasac.chatbot.shared.enums.HandoverCloseReason;
@@ -53,6 +57,10 @@ class BotpressDeskEventsTest {
     private static final String BOT_ANSWER = """
             {"type":"message_created","data":{"id":"m5","userId":"user_bot","payload":{"type":"text",
             "text":"Branches open at 8:00."},"metadata":{"streamId":"s:llmz_1:item-0","citations":[]}}}""";
+    private static final String OTHER_AGENT_ASSIGNED = """
+            {"type":"message_created","data":{"id":"m6","userId":"user_bot","payload":{"type":"text",
+            "text":"Dara has joined the conversation."},"metadata":{"hitl":{"kind":"agent_assigned",
+            "ticketId":"tkt_1","agentName":"Dara  Keo"}}}}""";
     private static final String TYPING = """
             {"type":"typing_started","data":{}}""";
 
@@ -67,8 +75,13 @@ class BotpressDeskEventsTest {
 
     @BeforeEach
     void setUp() {
-        events = new BotpressDeskEvents(handoverService, helpdesk);
+        events = events(2, false);
         when(handoverService.findOpen("s1")).thenReturn(Optional.empty());
+    }
+
+    private BotpressDeskEvents events(int maxChatsPerAgent, boolean agentTakeover) {
+        return new BotpressDeskEvents(handoverService, helpdesk, new HandoverProperties(false, Duration.ofMinutes(2),
+                Duration.ofSeconds(60), null, maxChatsPerAgent, agentTakeover));
     }
 
     private void receive(String event) throws Exception {
@@ -81,46 +94,157 @@ class BotpressDeskEventsTest {
                 .reason(HandoverReason.USER_REQUEST).createdAt(Instant.now()).build();
     }
 
+    private Handover activeWith(String agentName, String agentKey) {
+        Handover active = handover(HandoverStatus.ACTIVE);
+        active.setAgentName(agentName);
+        active.setAgentKey(agentKey);
+        when(handoverService.findOpen("s1")).thenReturn(Optional.of(active));
+        return active;
+    }
+
+    private void neverConnected() {
+        verify(handoverService, never()).accept(any(), anyString(), anyString());
+        verify(handoverService, never()).startByAgent(anyString(), any(), anyString(), anyString());
+        verify(handoverService, never()).agentMessage(any(), anyString());
+    }
+
+    // ---- rule 1: only customers who asked ----
+
+    @Test
+    void anAgentJoiningAChatNobodyAskedForIsNotConnected() throws Exception {
+        receive(AGENT_ASSIGNED);
+        receive(AGENT_REPLY);
+
+        neverConnected();
+        verify(helpdesk, org.mockito.Mockito.times(2))
+                .notConnected("s1", Channel.WEBSITE, "sokha chan", NotConnected.NO_REQUEST, null, 0);
+    }
+
+    @Test
+    void withTakeoverOnAnAgentJoiningABotChatOpensAnActiveHandover() throws Exception {
+        events = events(2, true);
+        Handover started = handover(HandoverStatus.ACTIVE);
+        when(handoverService.startByAgent("s1", Channel.WEBSITE, "Sokha", "sokha chan")).thenReturn(started);
+
+        receive(AGENT_ASSIGNED);
+
+        verify(handoverService).startByAgent("s1", Channel.WEBSITE, "Sokha", "sokha chan");
+        verify(helpdesk).agentTookOver(started);
+    }
+
+    @Test
+    void afterTheCustomerEndedTheChatDeskEventsDoNotPullThemBackIn() throws Exception {
+        when(helpdesk.stillOpenAfterOurClose("s1")).thenReturn(true);
+
+        receive(AGENT_ASSIGNED);
+        receive(AGENT_REPLY);
+
+        neverConnected();
+        verify(helpdesk, never()).notConnected(anyString(), any(), anyString(), any(), any(), org.mockito.ArgumentMatchers.anyInt());
+    }
+
     @Test
     void agentJoiningAWaitingChatAcceptsItAndForwardsTheWaitingMessages() throws Exception {
         Handover waiting = handover(HandoverStatus.WAITING);
         Handover accepted = handover(HandoverStatus.ACTIVE);
         when(handoverService.findOpen("s1")).thenReturn(Optional.of(waiting));
-        when(handoverService.accept(waiting.getId(), "Sokha")).thenReturn(accepted);
-        when(handoverService.messagesForHandover(accepted.getId(), 0)).thenReturn(List.of());
+        when(handoverService.accept(waiting.getId(), "Sokha", "sokha chan")).thenReturn(accepted);
 
         receive(AGENT_ASSIGNED);
 
-        verify(handoverService).accept(waiting.getId(), "Sokha");
-        verify(helpdesk).forwardWaitingMessages(accepted, List.of());
+        verify(handoverService).accept(waiting.getId(), "Sokha", "sokha chan");
+        // what the customer wrote while waiting is already in Desk: nothing is re-posted on join
+        verify(helpdesk, never()).customerMessage(any(), any());
     }
 
     @Test
-    void agentJoiningABotChatOpensAnActiveHandover() throws Exception {
-        receive(AGENT_ASSIGNED);
+    void agentReplyWithoutAJoinEventStillAcceptsTheWaitingChat() throws Exception {
+        Handover waiting = handover(HandoverStatus.WAITING);
+        Handover accepted = handover(HandoverStatus.ACTIVE);
+        when(handoverService.findOpen("s1")).thenReturn(Optional.of(waiting));
+        when(handoverService.accept(waiting.getId(), "Sokha", "sokha chan")).thenReturn(accepted);
 
-        verify(handoverService).startByAgent("s1", Channel.WEBSITE, "Sokha");
+        receive(AGENT_REPLY);
+
+        verify(handoverService).agentMessage(accepted.getId(), "Hello from Desk");
     }
 
+    // ---- rule 2: one agent per chat ----
+
     @Test
-    void agentReplyIsShownToTheCustomer() throws Exception {
-        Handover active = handover(HandoverStatus.ACTIVE);
-        when(handoverService.findOpen("s1")).thenReturn(Optional.of(active));
+    void theAgentWhoHasTheChatIsShownToTheCustomer() throws Exception {
+        Handover active = activeWith("Sokha", "sokha chan");
 
         receive(AGENT_REPLY);
 
         verify(handoverService).agentMessage(active.getId(), "Hello from Desk");
-        verify(handoverService, never()).accept(any(), anyString());
+        verify(handoverService, never()).accept(any(), anyString(), anyString());
     }
 
     @Test
-    void agentReplyWithoutAJoinEventStillOpensTheHandover() throws Exception {
-        Handover started = handover(HandoverStatus.ACTIVE);
-        when(handoverService.startByAgent("s1", Channel.WEBSITE, "Sokha")).thenReturn(started);
+    void aSecondAgentIsNotConnected() throws Exception {
+        activeWith("Sokha", "sokha chan");
+
+        receive(OTHER_AGENT_ASSIGNED);
+
+        neverConnected();
+        verify(helpdesk).notConnected("s1", Channel.WEBSITE, "dara keo", NotConnected.OTHER_AGENT, "Sokha", 0);
+    }
+
+    @Test
+    void chatsAcceptedBeforeAgentKeysAreMatchedByFirstName() throws Exception {
+        Handover active = activeWith("Sokha", null);
 
         receive(AGENT_REPLY);
 
-        verify(handoverService).agentMessage(started.getId(), "Hello from Desk");
+        verify(handoverService).agentMessage(active.getId(), "Hello from Desk");
+    }
+
+    // ---- rule 3: at most N live chats per agent ----
+
+    @Test
+    void anAgentAtTheLimitIsNotConnectedAndCanReplyOnceFree() throws Exception {
+        Handover waiting = handover(HandoverStatus.WAITING);
+        Handover accepted = handover(HandoverStatus.ACTIVE);
+        when(handoverService.findOpen("s1")).thenReturn(Optional.of(waiting));
+        when(handoverService.activeChatsOf("sokha chan")).thenReturn(2L);
+
+        receive(AGENT_ASSIGNED);
+
+        neverConnected();
+        verify(helpdesk).notConnected("s1", Channel.WEBSITE, "sokha chan", NotConnected.AGENT_AT_LIMIT, null, 2);
+
+        // one of the agent's chats ended: the next reply connects them
+        when(handoverService.activeChatsOf("sokha chan")).thenReturn(1L);
+        when(handoverService.accept(waiting.getId(), "Sokha", "sokha chan")).thenReturn(accepted);
+        receive(AGENT_REPLY);
+
+        verify(handoverService).accept(waiting.getId(), "Sokha", "sokha chan");
+        verify(handoverService).agentMessage(accepted.getId(), "Hello from Desk");
+    }
+
+    @Test
+    void zeroMeansNoLimit() throws Exception {
+        events = events(0, false);
+        Handover waiting = handover(HandoverStatus.WAITING);
+        when(handoverService.findOpen("s1")).thenReturn(Optional.of(waiting));
+        when(handoverService.activeChatsOf(anyString())).thenReturn(50L);
+        when(handoverService.accept(eq(waiting.getId()), anyString(), anyString())).thenReturn(handover(HandoverStatus.ACTIVE));
+
+        receive(AGENT_ASSIGNED);
+
+        verify(handoverService).accept(waiting.getId(), "Sokha", "sokha chan");
+    }
+
+    // ---- closing and ignored events ----
+
+    @Test
+    void deskTicketCloseLetsTheBotAnswerAgain() throws Exception {
+        when(helpdesk.stillOpenAfterOurClose("s1")).thenReturn(true);
+
+        receive(TICKET_CLOSED);
+
+        verify(helpdesk).deskTicketClosed("s1");
     }
 
     @Test
@@ -139,8 +263,7 @@ class BotpressDeskEventsTest {
         receive(CSAT_REQUEST);
         receive(TYPING);
 
-        verify(handoverService, never()).startByAgent(anyString(), any(), anyString());
-        verify(handoverService, never()).agentMessage(any(), anyString());
+        neverConnected();
         verify(handoverService, never()).close(any(), any());
         verify(handoverService, never()).messagesForHandover(any(), anyLong());
         verifyNoInteractions(helpdesk);
@@ -151,5 +274,11 @@ class BotpressDeskEventsTest {
         assertEquals("Sokha", BotpressDeskEvents.firstName("Sokha Chan"));
         assertEquals("Agent", BotpressDeskEvents.firstName(null));
         assertEquals("Agent", BotpressDeskEvents.firstName("  "));
+    }
+
+    @Test
+    void agentsAreRecognisedByTheirFullName() {
+        assertEquals("dara keo", BotpressDeskEvents.agentKey("  Dara   Keo "));
+        assertEquals("agent", BotpressDeskEvents.agentKey(null));
     }
 }

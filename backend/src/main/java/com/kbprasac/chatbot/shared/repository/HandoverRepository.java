@@ -23,6 +23,9 @@ public interface HandoverRepository extends JpaRepository<Handover, UUID> {
     /** how many are ahead in the queue */
     long countByStatusAndCreatedAtBefore(HandoverStatus status, Instant createdAt);
 
+    /** live chats an agent has (assignment rule: at most N per agent) */
+    long countByStatusAndAgentKey(HandoverStatus status, String agentKey);
+
     List<Handover> findByStatusAndLastCustomerActivityAtBefore(HandoverStatus status, Instant cutoff);
 
     /** The most recently finished agent chat of a session (the one a customer rates). */

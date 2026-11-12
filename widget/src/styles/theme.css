@@ -38,6 +38,7 @@ body {
 }
 
 .kb-app {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -338,6 +339,89 @@ body {
 .kb-file__status {
   font-size: 12px;
   opacity: 0.85;
+}
+
+/* the question sent with a file to the AI chat */
+.kb-file__caption {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* AI chat file waiting to be sent: the customer sees the text the bot will read */
+.kb-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--kb-border);
+  border-radius: 12px;
+  background: var(--kb-bg);
+  font-size: 13px;
+}
+
+.kb-draft__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.kb-draft__thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.kb-draft__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-draft__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--kb-text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.kb-draft__remove:hover {
+  background: var(--kb-border);
+  color: var(--kb-text);
+}
+
+.kb-draft__label {
+  color: var(--kb-text-muted);
+  font-size: 12px;
+}
+
+.kb-draft__text {
+  max-height: 96px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--kb-surface);
+  border: 1px solid var(--kb-border);
+  font-size: 12.5px;
+}
+
+.kb-draft__hint {
+  color: var(--kb-text-muted);
+  font-size: 12px;
 }
 
 /* ---------- voice ---------- */
@@ -655,4 +739,69 @@ body {
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+}
+
+/* ---------- end chat ---------- */
+/* "End chat" / "Cancel request": same place as "Talk to an agent", a little stronger */
+.kb-chip--end {
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--kb-agent);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.kb-chip--end:hover {
+  background: #ffffff;
+}
+
+/* confirmation inside the widget (the embedding frame has no confirm()) */
+.kb-confirm {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.kb-confirm__box {
+  width: min(340px, 100%);
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border-radius: var(--kb-radius);
+  background: var(--kb-surface);
+  color: var(--kb-text);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.25);
+}
+
+.kb-confirm__title {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.kb-confirm__hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--kb-text-muted);
+}
+
+.kb-confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.kb-confirm__actions .kb-button {
+  background: var(--kb-surface);
+  border-color: var(--kb-border);
+  color: var(--kb-text);
+}
+
+.kb-confirm__actions .kb-button--danger {
+  background: var(--kb-error-text);
+  border-color: var(--kb-error-text);
+  color: #ffffff;
 }

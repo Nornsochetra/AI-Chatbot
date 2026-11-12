@@ -5,6 +5,8 @@
 
 # Backend build output
 backend/build/
+# Tesseract language data (downloaded, large; docs/attachments-ai-chat.md)
+backend/tessdata/
 backend/.gradle/
 backend/target/
 

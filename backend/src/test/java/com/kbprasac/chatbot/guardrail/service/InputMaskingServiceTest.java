@@ -209,4 +209,69 @@ class InputMaskingServiceTest {
     void masksCambodianPhoneNumbers(String text) {
         assertTrue(service.mask(text).changed(), "should mask: " + text);
     }
+
+    // --- account numbers typed without a keyword (BRD: never to the chatbot) ---
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "can you check 001234567 for me",
+            "my transfer to 1234 5678 9012 failed",
+            "ផ្ទេរទៅ ០០១២៣៤៥៦៧ មិនបាន"
+    })
+    void masksBareAccountNumbers(String text) {
+        assertTrue(service.mask(text).changed(), "should mask: " + text);
+    }
+
+    @Test
+    void bareNumbersStayVisibleForTheLiveAgent() {
+        // agents may collect personal data (BRD); only secrets are masked for them
+        assertFalse(service.maskSecrets("can you check 001234567 for me").changed());
+    }
+
+    // --- text read from a file (OCR): more personal data than typed messages ---
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "Contact: sokha.chan@example.com",
+            "Balance: 1,250.00 USD",
+            "Amount $ 25.50",
+            "Fee 250,000 ៛",
+            "Ref: FT26111200123",
+            "Transaction ID 7A3F99X2",
+            "លេខយោង 2611120045",
+            "From 000 123 456 78",
+            "Account holder 123456789",
+            // stricter for OCR: separators lost or digits misread, promotion amounts too
+            "Total $1230",
+            "Get 5% cashback up to $10",
+            "Win 5000 riel every week",
+            "Balance 1250.00",
+            "សមតុល្យ ១ ២៥០ ០០០",
+            "Paid 1280USD",
+            "Card 4111 1111 111",
+            "Ref 482193"
+    })
+    void fileTextMasksEmailsAmountsReferencesAndAccountNumbers(String text) {
+        MaskResult result = service.maskFileText(text);
+        assertTrue(result.changed(), "should mask: " + text + " -> " + result.text());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "Error 403: Transaction limit exceeded",
+            "Get 5% cashback on every purchase",
+            "Promotion valid until 31-12-2026",
+            "Open 8:00 - 17:00, Monday to Friday",
+            "Order #ORD-00182, 3 items",
+            "Reference guide for new users"
+    })
+    void fileTextKeepsWhatTheBotNeeds(String text) {
+        assertEquals(text, service.maskFileText(text).text());
+    }
+
+    @Test
+    void fileTextKeepsTheLabelSoTheBotKnowsWhatWasHidden() {
+        assertEquals("Ref: " + InputMaskingService.MASK, service.maskFileText("Ref: FT26111200123").text());
+        assertEquals("Balance: " + InputMaskingService.MASK, service.maskFileText("Balance: 1,250.00 USD").text());
+    }
 }
