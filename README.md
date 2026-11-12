@@ -28,6 +28,8 @@ Customers chat through a custom widget. A Spring Boot backend sits between the w
 | Customer can cancel the request while waiting, or end the live chat (with confirmation) | Done |
 | Auto-route to an agent: urgent messages (fraud, lost / stolen card, hacked), asking for a person in words, two failed bot answers in a row | Done |
 | Messages follow the detected language (Khmer / English); goodbye message after a live chat | Done |
+| Live chat closes after 2 minutes of customer silence, with an "are you still connected?" message at 1 minute | Done |
+| Agent pages limited to the bank's IPs (`AGENT_ALLOWED_IPS`) | Done; 2FA comes with real agent accounts |
 | Chat history retention (deleted after N days) | Done |
 | Real-time updates (Server-Sent Events) and typing indicators on both sides | Done |
 | Post-chat rating (agent and AI chats) | Done |
@@ -79,7 +81,8 @@ Flyway creates the tables on first start. The backend runs on `http://localhost:
 | `BOTPRESS_BASE_URL` | `https://chat.botpress.cloud/<id>` |
 | `CORS_ALLOWED_ORIGINS` | Widget origin, default `http://localhost:3000` |
 | `GEMINI_API_KEY` | Voice; empty turns voice off (the endpoints answer 503) |
-| `HANDOVER_AUTO_CLOSE`, `HANDOVER_INACTIVITY_TIMEOUT` | Auto-close live chats after customer inactivity (off by default: only the agent closes a chat) |
+| `HANDOVER_AUTO_CLOSE`, `HANDOVER_INACTIVITY_TIMEOUT` | Auto-close a live chat after 2 minutes without a customer message (BRD, on by default; `false` = only the agent closes it) |
+| `HANDOVER_STILL_THERE_AFTER` | Before the auto-close, ask a silent customer "are you still connected?" (default `1m`, `0` = off) |
 | `HANDOVER_WAITING_REMINDER` | While no agent has accepted, remind the customer this often (default `60s`, `0` = off) |
 | `AUTO_ROUTE` | BRD auto-route to an agent (default `true`) |
 | `CHAT_RETENTION_DAYS` | Chat history is deleted after this many days (default 90, `0` = kept) |
@@ -91,6 +94,7 @@ Flyway creates the tables on first start. The backend runs on `http://localhost:
 | `OCR_ENABLED`, `OCR_ENGINE`, `OCR_TESSDATA_DIR`, `OCR_TESSERACT_PATH`, `OCR_LANGUAGES`, `OCR_TIMEOUT` | Reading files sent to the AI chat with Tesseract (off until the language files are in place) |
 | `CLAMAV_ENABLED`, `CLAMAV_HOST`, `CLAMAV_PORT` | ClamAV virus scan (off until installed) |
 | `AGENT_USERNAME`, `AGENT_PASSWORD` | Agent login for the secure file and message pages; an empty password is generated and printed in the log |
+| `AGENT_ALLOWED_IPS` | Agent pages and APIs only from these IPs / ranges, e.g. the bank's public IP (BRD internal access security; empty = anywhere) |
 
 Real environment variables override `.env`. Never commit `.env` or API keys.
 

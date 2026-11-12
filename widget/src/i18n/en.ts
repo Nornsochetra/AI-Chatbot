@@ -23,6 +23,8 @@ export const en = {
     AGENT_JOINED: '{name} joined the chat.',
     AGENT_LEFT: "{name} ended the chat. You're chatting with the AI assistant again.",
     ATTACHMENT_REMOVED: '{name} removed a file you sent.',
+    STILL_CONNECTED:
+      "Are you still connected? Please send a message to continue. If we don't hear from you soon, this chat will end and the AI assistant will help you again.",
     INACTIVITY_CLOSED:
       'The live chat ended because there was no reply for 2 minutes. The AI assistant can keep helping you. To talk to an agent again, tap "Talk to an agent".',
     CUSTOMER_ENDED: "You ended the chat with {name}. You're chatting with the AI assistant again.",

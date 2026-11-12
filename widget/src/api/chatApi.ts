@@ -6,7 +6,10 @@ export type HandoverReason = 'USER_REQUEST' | 'BOT_SUGGESTED';
 export type SystemCode =
   | 'WAITING'
   | 'WAITING_REMINDER'
-  | 'AGENT_JOINED' | 'AGENT_LEFT' | 'ATTACHMENT_REMOVED' | 'INACTIVITY_CLOSED'
+  | 'AGENT_JOINED' | 'AGENT_LEFT' | 'ATTACHMENT_REMOVED'
+  /** live chat, customer quiet for a while: "are you still connected?" before the inactivity close */
+  | 'STILL_CONNECTED'
+  | 'INACTIVITY_CLOSED'
   | 'CUSTOMER_ENDED' | 'REQUEST_CANCELLED'
   /** widget only: the goodbye line after a live chat ends (BRD message customization) */
   | 'GOODBYE';

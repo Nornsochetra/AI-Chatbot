@@ -18,7 +18,7 @@ interface Props {
 }
 
 /** said to the customer like a chat reply, not shown as a grey status line */
-const SPOKEN_CODES = new Set(['WAITING', 'WAITING_REMINDER', 'GOODBYE']);
+const SPOKEN_CODES = new Set(['WAITING', 'WAITING_REMINDER', 'STILL_CONNECTED', 'GOODBYE']);
 
 export function MessageBubble({ message, t, onTalkToAgent, onSpeak, speakState }: Props) {
   if (message.role === 'system' && message.systemCode && SPOKEN_CODES.has(message.systemCode)) {

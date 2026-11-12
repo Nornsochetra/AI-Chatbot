@@ -9,6 +9,8 @@ public enum SystemMessageCode {
     AGENT_LEFT,
     /** the agent removed a file the customer uploaded */
     ATTACHMENT_REMOVED,
+    /** live chat, customer silent for a while: "are you still connected?" before the inactivity close */
+    STILL_CONNECTED,
     INACTIVITY_CLOSED,
     /** the customer ended the chat with the agent */
     CUSTOMER_ENDED,

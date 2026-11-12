@@ -33,7 +33,8 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
  * - customer endpoints (/api/v1/chat/**) are public; the random session id identifies the chat
  * - agent endpoints (/api/v1/agent/**) need the AGENT role (HTTP Basic, one agent account from .env)
  * - the agent console page itself (/agent/**) is public; it asks for the login and calls the agent API
- * Admin 2FA, real agent accounts / SSO and the IP whitelist come with the admin portal.
+ * - agent pages and APIs can be limited to the bank's IPs ({@link AgentIpFilter}, app.agent.allowed-ips)
+ * Admin 2FA and real agent accounts / SSO come with the admin portal.
  */
 @Configuration
 public class SecurityConfig {

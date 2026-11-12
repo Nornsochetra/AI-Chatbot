@@ -81,7 +81,7 @@ class BotpressDeskEventsTest {
 
     private BotpressDeskEvents events(int maxChatsPerAgent, boolean agentTakeover) {
         return new BotpressDeskEvents(handoverService, helpdesk, new HandoverProperties(false, Duration.ofMinutes(2),
-                Duration.ofSeconds(60), null, maxChatsPerAgent, agentTakeover));
+                Duration.ofMinutes(1), Duration.ofSeconds(60), null, maxChatsPerAgent, agentTakeover));
     }
 
     private void receive(String event) throws Exception {

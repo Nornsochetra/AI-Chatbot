@@ -74,7 +74,8 @@ class HandoverServiceTest {
     private HandoverService serviceWith(boolean autoClose, Duration waitingReminder) {
         return new HandoverService(handoverRepository, messageRepository, chatEventRepository, attachmentRepository,
                 helpdesk,
-                new HandoverProperties(autoClose, Duration.ofMinutes(2), waitingReminder, null, 2, false), events);
+                new HandoverProperties(autoClose, Duration.ofMinutes(2), Duration.ofMinutes(1), waitingReminder,
+                        null, 2, false), events);
     }
 
     private Handover waitingSince(Duration ago, Instant lastReminder) {
@@ -291,6 +292,67 @@ class HandoverServiceTest {
         assertEquals(HandoverStatus.CLOSED, stale.getStatus());
         assertEquals(HandoverCloseReason.CUSTOMER_INACTIVE, stale.getCloseReason());
         assertEquals("INACTIVITY_CLOSED", savedMessages().get(0).getText());
+    }
+
+    @Test
+    void silentCustomerIsAskedIfStillConnected() {
+        Handover quiet = handover(HandoverStatus.ACTIVE, Instant.now().minus(Duration.ofSeconds(70)));
+        when(handoverRepository.findByStatusAndLastCustomerActivityAtBefore(eq(HandoverStatus.ACTIVE), any()))
+                .thenReturn(List.of(quiet));
+
+        service.askStillThere();
+
+        HandoverMessage asked = savedMessages().get(0);
+        assertEquals(MessageSender.SYSTEM, asked.getSender());
+        assertEquals("STILL_CONNECTED", asked.getText());
+        assertEquals(null, asked.getSenderName());
+        assertEquals(HandoverStatus.ACTIVE, quiet.getStatus());
+        assertEquals(true, quiet.getLastReminderAt() != null);
+    }
+
+    @Test
+    void stillConnectedIsAskedOncePerSilence() {
+        Handover quiet = handover(HandoverStatus.ACTIVE, Instant.now().minus(Duration.ofSeconds(90)));
+        quiet.setLastReminderAt(Instant.now().minus(Duration.ofSeconds(20)));
+        when(handoverRepository.findByStatusAndLastCustomerActivityAtBefore(eq(HandoverStatus.ACTIVE), any()))
+                .thenReturn(List.of(quiet));
+
+        service.askStillThere();
+
+        verify(messageRepository, never()).save(any());
+    }
+
+    @Test
+    void stillConnectedIsAskedAgainAfterTheCustomerReplied() {
+        // asked, the customer answered, then went quiet again
+        Handover quiet = handover(HandoverStatus.ACTIVE, Instant.now().minus(Duration.ofSeconds(65)));
+        quiet.setLastReminderAt(Instant.now().minus(Duration.ofSeconds(100)));
+        when(handoverRepository.findByStatusAndLastCustomerActivityAtBefore(eq(HandoverStatus.ACTIVE), any()))
+                .thenReturn(List.of(quiet));
+
+        service.askStillThere();
+
+        assertEquals("STILL_CONNECTED", savedMessages().get(0).getText());
+    }
+
+    @Test
+    void stillConnectedCutoffIsOneMinuteAgo() {
+        when(handoverRepository.findByStatusAndLastCustomerActivityAtBefore(any(), any())).thenReturn(List.of());
+        Instant before = Instant.now();
+
+        service.askStillThere();
+
+        ArgumentCaptor<Instant> cutoff = ArgumentCaptor.forClass(Instant.class);
+        verify(handoverRepository).findByStatusAndLastCustomerActivityAtBefore(eq(HandoverStatus.ACTIVE), cutoff.capture());
+        long secondsBack = Duration.between(cutoff.getValue(), before).toSeconds();
+        assertEquals(true, secondsBack >= 59 && secondsBack <= 61, "cutoff " + secondsBack + "s back");
+    }
+
+    @Test
+    void noStillConnectedQuestionWithAutoCloseOff() {
+        serviceWithAutoClose(false).askStillThere();
+
+        verify(handoverRepository, never()).findByStatusAndLastCustomerActivityAtBefore(any(), any());
     }
 
     @Test

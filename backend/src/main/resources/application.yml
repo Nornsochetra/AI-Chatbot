@@ -45,10 +45,12 @@ app:
     # chat history (bot turns and live chat messages) is deleted after this many days; 0 = kept
     history-retention-days: ${CHAT_RETENTION_DAYS:90}
   handover:
-    # Off: only the agent closes a live chat. The requirements ask for an automatic close after
-    # 2 minutes without a customer message; set HANDOVER_AUTO_CLOSE=true to switch it on.
-    auto-close-enabled: ${HANDOVER_AUTO_CLOSE:false}
+    # BRD: a live chat closes automatically after 2 minutes without a customer message and goes back to the AI.
+    # HANDOVER_AUTO_CLOSE=false: only the agent closes a live chat.
+    auto-close-enabled: ${HANDOVER_AUTO_CLOSE:true}
     inactivity-timeout: ${HANDOVER_INACTIVITY_TIMEOUT:2m}
+    # before that close, a silent customer is asked "are you still connected?" (0 = off)
+    still-there-after: ${HANDOVER_STILL_THERE_AFTER:1m}
     # while no agent has accepted, send the customer a "still waiting" message this often (0 = off)
     waiting-reminder: ${HANDOVER_WAITING_REMINDER:60s}
     # where agents work: Botpress Desk (docs/agent-inbox-switch.md)
@@ -92,6 +94,9 @@ app:
     # R&D: one agent account for the secure file page. If no password is set, one is generated and logged.
     username: ${AGENT_USERNAME:agent}
     password: ${AGENT_PASSWORD:}
+    # BRD internal access security: agent pages and APIs only from these IPs / ranges (comma-separated, e.g.
+    # 203.0.113.10,10.0.0.0/8). Empty = from anywhere (R&D). Others get 403 before the login is checked.
+    allowed-ips: ${AGENT_ALLOWED_IPS:}
 
 # Gemini voice (speech-to-text and read-aloud). Empty GEMINI_API_KEY = voice off (endpoints answer 503).
 gemini:

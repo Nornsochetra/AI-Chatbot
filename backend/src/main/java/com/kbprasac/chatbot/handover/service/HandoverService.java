@@ -42,6 +42,10 @@ public class HandoverService {
 
     static final List<HandoverStatus> OPEN = List.of(HandoverStatus.WAITING, HandoverStatus.ACTIVE);
 
+    /** System messages the bank says in its own voice, without the agent's name. */
+    private static final List<String> UNNAMED_CODES = List.of(SystemMessageCode.WAITING.name(),
+            SystemMessageCode.WAITING_REMINDER.name(), SystemMessageCode.STILL_CONNECTED.name());
+
     private final HandoverRepository handoverRepository;
     private final HandoverMessageRepository messageRepository;
     private final ChatEventRepository chatEventRepository;
@@ -276,6 +280,31 @@ public class HandoverService {
     }
 
     /**
+     * BRD message customization: before the inactivity close, ask a silent customer "are you still connected?"
+     * (after {@code app.handover.still-there-after}, default 1 minute). Asked once per silence: a customer message
+     * resets the timer, and the next silence asks again. {@code last_reminder_at} keeps when it was asked; the
+     * queue reminders that used it while waiting all come before the agent joined.
+     */
+    @Scheduled(fixedDelay = 10_000, initialDelay = 10_000)
+    @Transactional
+    public void askStillThere() {
+        if (!props.asksStillThere()) {
+            return;
+        }
+        Instant now = Instant.now();
+        Instant cutoff = now.minus(props.stillThereAfter());
+        for (Handover handover : handoverRepository.findByStatusAndLastCustomerActivityAtBefore(HandoverStatus.ACTIVE, cutoff)) {
+            Instant asked = handover.getLastReminderAt();
+            if (asked != null && asked.isAfter(handover.getLastCustomerActivityAt())) {
+                continue;
+            }
+            handover.setLastReminderAt(now);
+            handoverRepository.save(handover);
+            addSystemMessage(handover, SystemMessageCode.STILL_CONNECTED);
+        }
+    }
+
+    /**
      * Requirement: after 2 minutes without a customer message, close the live chat and return to the bot.
      * Only when {@code app.handover.auto-close-enabled} is on; otherwise only the agent closes the chat.
      */
@@ -345,8 +374,6 @@ public class HandoverService {
 
     /** The customer sees the agent's login username on agent messages and on joined / left events. */
     private static boolean namedAfterAgent(MessageSender sender, String text) {
-        return sender == MessageSender.AGENT
-                || (sender == MessageSender.SYSTEM && !SystemMessageCode.WAITING.name().equals(text)
-                        && !SystemMessageCode.WAITING_REMINDER.name().equals(text));
+        return sender == MessageSender.AGENT || (sender == MessageSender.SYSTEM && !UNNAMED_CODES.contains(text));
     }
 }

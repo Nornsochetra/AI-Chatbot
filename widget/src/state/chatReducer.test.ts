@@ -238,6 +238,24 @@ describe('chatReducer: live agent', () => {
     ]);
   });
 
+  it('asks a quiet customer if they are still connected, without ending the live chat', () => {
+    const withAgent: ChatState = { ...initialState, sessionId: 's1', mode: 'agent', cursor: 9 };
+    const s = chatReducer(withAgent, {
+      type: 'updates_received',
+      updates: updates({
+        state: 'HUMAN_ACTIVE',
+        handoverStatus: 'ACTIVE',
+        cursor: 10,
+        messages: [{ id: 10, sender: 'SYSTEM', text: 'STILL_CONNECTED', senderName: null, createdAt: '' }],
+      }),
+    });
+    expect(s.mode).toBe('agent');
+    expect(s.ratingAsked).toBe(false);
+    expect(s.messages).toEqual([
+      { id: 'live-10', role: 'system', text: 'STILL_CONNECTED', systemCode: 'STILL_CONNECTED', senderName: undefined },
+    ]);
+  });
+
   it('adds agent and system messages, skips the customer echo, advances the cursor', () => {
     const waiting: ChatState = { ...initialState, sessionId: 's1', mode: 'waiting' };
     const s = chatReducer(waiting, {

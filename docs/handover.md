@@ -80,9 +80,9 @@ The open handover in the database (`WAITING` or `ACTIVE`) is the single source o
 | One open handover per session | Asking again returns the open one |
 | Agent must accept before replying | Reply on a `WAITING` handover → HTTP 409 |
 | Only one agent can accept | Second accept → HTTP 409 |
-| Only the agent closes the chat (default) | The console shows how long the customer has been idle, so the agent can decide when to close |
-| 2-minute inactivity close (requirement, **off by default**) | With `HANDOVER_AUTO_CLOSE=true`: a check runs every 15 s and closes `ACTIVE` handovers with no customer message for `app.handover.inactivity-timeout` (default `2m`). The timer starts when the agent accepts, and every customer message resets it. Waiting in the queue does not count. The console then also shows "auto-close in …". |
+| 2-minute inactivity close (requirement, **on by default**) | `HANDOVER_AUTO_CLOSE=false` leaves closing to the agent. When on, a check runs every 15 s and closes `ACTIVE` handovers with no customer message for `app.handover.inactivity-timeout` (default `2m`). The timer starts when the agent accepts, and every customer message resets it. Waiting in the queue does not count. The console then also shows "auto-close in …". |
 | Customer is never left without an answer while waiting | Right away: a `WAITING` chat bubble. Banner: "You're number {n} in the queue". Every `app.handover.waiting-reminder` (default `60s`) without an agent: a `WAITING_REMINDER` bubble ("Our agents are still busy… an agent will be with you soon"). A check runs every 10 s; reminders stop when an agent accepts. See section 14. |
+| "Are you still connected?" message (BRD message customization) | With auto-close on: after `app.handover.still-there-after` (default `1m`) without a customer message, a `STILL_CONNECTED` bubble asks the customer to reply, without the agent's name. Asked once per silence (a check every 10 s; `handover.last_reminder_at` keeps when); a customer message resets it. `0` = off |
 | AI resumption message (requirement) | System event `INACTIVITY_CLOSED` (only with auto-close on), shown by the widget in the customer's language with how to reconnect |
 | Agents may collect personal data, the AI may not (requirement) | Messages to the bot: full masking. Messages to an agent: **secrets only** (OTP, PIN, password, CVV, card numbers); phone numbers and IDs stay visible so the agent can verify or call back |
 | Agent sees the conversation context (requirement) | The console shows the bot conversation before the handover (masked text) |
@@ -100,7 +100,7 @@ The open handover in the database (`WAITING` or `ACTIVE`) is the single source o
 | `GET` | `/api/v1/chat/sessions/{sessionId}/updates?after={cursor}` | `{ state, handoverStatus, queuePosition, messages[], cursor }`. Agent messages and system events after the cursor. **Fallback** when the stream is not available. |
 | `POST` | `/api/v1/chat/messages` | Unchanged. During a handover the reply is `null`, `state` is `HUMAN_ACTIVE`, and the message goes to the agent. |
 
-System events (`sender: SYSTEM`, `text` is a code): `WAITING`, `WAITING_REMINDER`, `AGENT_JOINED`, `AGENT_LEFT`, `INACTIVITY_CLOSED`. Agent messages and `AGENT_JOINED` / `AGENT_LEFT` / `INACTIVITY_CLOSED` carry `senderName`: **the agent's login username** (shown to the customer as "sokha joined the chat", "sokha is typing…", and on the agent's bubbles).
+System events (`sender: SYSTEM`, `text` is a code): `WAITING`, `WAITING_REMINDER`, `AGENT_JOINED`, `AGENT_LEFT`, `STILL_CONNECTED`, `INACTIVITY_CLOSED`. Agent messages and `AGENT_JOINED` / `AGENT_LEFT` / `INACTIVITY_CLOSED` carry `senderName`: **the agent's login username** (shown to the customer as "sokha joined the chat", "sokha is typing…", and on the agent's bubbles).
 
 ### Agent (requires the `AGENT` role, HTTP Basic)
 
@@ -153,7 +153,9 @@ Limitations (R&D only):
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `app.handover.auto-close-enabled` / `HANDOVER_AUTO_CLOSE` | `false` | Close a live chat automatically when the customer is silent (requirement). Off: only the agent closes it |
+| `app.handover.auto-close-enabled` / `HANDOVER_AUTO_CLOSE` | `true` | Close a live chat automatically when the customer is silent (requirement). Off: only the agent closes it |
+| `app.handover.still-there-after` / `HANDOVER_STILL_THERE_AFTER` | `1m` | With auto-close on: ask a silent customer "are you still connected?" after this long. `0`, or not shorter than the inactivity timeout = off |
+| `app.agent.allowed-ips` / `AGENT_ALLOWED_IPS` | (empty = anywhere) | Agent pages and APIs only from these IPs / CIDR ranges, comma-separated (BRD internal access security). Others get 403 before the login. Behind a proxy, set `server.forward-headers-strategy` so the client address is used |
 | `app.handover.inactivity-timeout` / `HANDOVER_INACTIVITY_TIMEOUT` | `2m` | How long without a customer message before the automatic close (only used when auto-close is on) |
 | `app.handover.waiting-reminder` / `HANDOVER_WAITING_REMINDER` | `60s` | While no agent has accepted, send the customer a "still busy" message this often. `0` = off |
 | `app.agent.username` / `AGENT_USERNAME` | `agent` | Console login |
@@ -199,7 +201,7 @@ Not checked yet: the widget and the console side by side in a browser (the brows
 
 ## 12. Open items
 
-0. **Decide the close rule:** agent-only close (current default) or the automatic close from the requirements after 2 minutes. If a customer simply leaves, an agent-only chat stays open until the agent closes it.
+0. ~~Decide the close rule~~: the BRD's 2-minute automatic close is the default (2026-11-12), with "are you still connected?" at 1 minute.
 1. **Which inbox for production:** the bank's helpdesk (name and API still unknown), Chatwoot, or a hardened version of the built-in console.
 2. **Real agent accounts:** per-agent logins or SSO with 2FA (required for internal access security), supervisors, assignment and transfer.
 3. **Auto-routing without a click:** the requirements also want automatic handover on repeated failures or urgent requests. Today the customer confirms the prompt. A fully automatic route needs the Botpress "needs human" signal (open question in [botpress-integration.md](botpress-integration.md)).
